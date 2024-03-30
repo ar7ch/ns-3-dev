@@ -226,13 +226,14 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
         Mac48Address from = hdr.GetAddr2();
         if (from != GetAddress()) // If a beacon is from another AP
         {
-            if (mapAPchn.count(from))
+            if (map_ap_channel.count(from))
             {
-                mapAPchn.erase(mapAPchn.find(from));
-                mapAPchn[from] = GetWifiPhy()->GetChannelNumber();
+                map_ap_channel.erase(map_ap_channel.find(from));
+                map_ap_channel[from] = GetWifiPhy()->GetChannelNumber();
             }
             else {
-                mapAPchn[from] = GetWifiPhy()->GetChannelNumber();
+                cout << "RriModule: heard new AP with MAC: " << from << " Channel: " << (unsigned int) GetWifiPhy()->GetChannelNumber() << endl;
+                map_ap_channel[from] = GetWifiPhy()->GetChannelNumber();
             }
 
         }
@@ -338,11 +339,10 @@ RriModuleMac::Scan()
     constexpr WifiPhyBand band = WIFI_PHY_BAND_5GHZ;
     constexpr WifiStandard standard = WIFI_STANDARD_80211ac;
     channel.Set(ch, chan_freq, width, standard, band);
-    cout << "RRI module: switch to scanning channel" << ch << endl;
+    // if ((uint16_t) GetWifiPhy()->GetChannelNumber() != ch) {
+    //     cout << "RRI module (" << GetBssid(0) << "): scanning channel " << ch << endl;
+    // }
     GetWifiPhy()->SetOperatingChannel(channel);
-
-    // std::cout<<GetWifiPhy ()->GetChannelNumber()<<std::endl;
-    // std::cout<<"..................."<<std::endl;
 
     // ScanEvent = Simulator::Schedule (Seconds(5), &StaWifiMacMsr::Scan,this);
     ScanEvent = Simulator::Schedule(m_scanduration, &RriModuleMac::Scan, this);
@@ -371,7 +371,7 @@ RriModuleMac::UpdateChannelLoad()
     mapchnload.clear();
 
     // mapchnload is updated with the help of mapAPchn by counting the number of APs in a channel
-    for (it = mapAPchn.begin(); it != mapAPchn.end(); ++it)
+    for (it = map_ap_channel.begin(); it != map_ap_channel.end(); ++it)
     {
         // std::cout<<"\n"<<it->first<<" "<<it->second;
         if (mapchnload.count(it->second))

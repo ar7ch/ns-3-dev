@@ -74,6 +74,7 @@
 #include "ns3/point-to-point-module.h"
 #include "ns3/rri-module.h"
 #include "ns3/wifi-module.h"
+#include "ns3/wifi-phy.h"
 
 #include <cassert>
 #include <iomanip>
@@ -120,11 +121,11 @@ displayStnSnr(Ptr<RriModuleMac> rriMod)
     std::map<Mac48Address, int>::iterator it2;
 
     /* Test in APChnl Map */
-    std::map<Mac48Address, int> mapAPchn = rriMod->mapAPchn;
+    std::map<Mac48Address, int> map_ap_channel = rriMod->map_ap_channel;
 
     cout << "AP Mac Address : \t  Channel No  " << endl;
     cout << "---------------------------------" << endl;
-    for (it2 = mapAPchn.begin(); it2 != mapAPchn.end(); ++it2)
+    for (it2 = map_ap_channel.begin(); it2 != map_ap_channel.end(); ++it2)
     {
         cout << setw(20) << it2->first << setw(10) << it2->second << "\n";
     }
@@ -137,7 +138,7 @@ displayStnSnr(Ptr<RriModuleMac> rriMod)
     cout << endl;
     for (it1 = mapapSnrSsid.begin(); it1 != mapapSnrSsid.end(); ++it1)
     {
-        chNo = mapAPchn[it1->first];
+        chNo = map_ap_channel[it1->first];
 
         apSsid = it1->second.second;
         ssidVal = apSsid.PeekString();
@@ -155,13 +156,12 @@ void
 AssociateWithBestSNR(Ptr<StaWifiMac> staMac1, Ptr<RriModuleMac> rriMod)
 {
     std::cout << "\n";
-    std::cout << "Inside Associate with Best: (" << staMac1->GetAddress() << ")" << std::endl;
     std::cout << "*************************** ";
     std::cout << "\n";
 
     // Get access to the mapapSnrSsid data structure of the client from the new mac
     std::map<Mac48Address, std::pair<double, Ssid>> mapapSnrSsid = rriMod->mapapSnrSsid;
-    std::map<Mac48Address, int> mapAPchn = rriMod->mapAPchn;
+    std::map<Mac48Address, int> mapAPchn = rriMod->map_ap_channel;
 
     std::map<Mac48Address, std::pair<double, Ssid>>::iterator it1;
 
@@ -192,20 +192,22 @@ AssociateWithBestSNR(Ptr<StaWifiMac> staMac1, Ptr<RriModuleMac> rriMod)
 
         int ch = mapAPchn[temp_add];
         /* from artem: simply using channel number as integer is not possible anymore */
-        WifiPhyOperatingChannel channel;
-        constexpr uint16_t chan_freq = 0;
+        // WifiPhyOperatingChannel channel;
         constexpr uint16_t width = 20;
+        constexpr uint16_t primary20idx = 0;
         constexpr WifiPhyBand band = WIFI_PHY_BAND_5GHZ;
-        channel.Set(ch, chan_freq, width, USED_80211_STANDARD, band);
+        // channel.Set(ch, chan_freq, width, USED_80211_STANDARD, band);
+
+        WifiPhy::ChannelTuple channel = std::make_tuple(ch, width, band, primary20idx);
         std::cout << "Setting channel to " << ch << endl;
         staMac1->GetWifiPhy()->SetOperatingChannel(channel);
+        // phy.SetChannel("{36, 20, BAND_5GHZ, 0}"); // this only works on helper
 
         // Associate to the AP using ssid
-
         std::cout << "Client associating to AP with maximum SNR: " << max << "\n";
         std::cout << "****************************************************" << std::endl;
 
-        std::cout << " MAC address \t Channel No, \t SSid: "
+        std::cout << " MAC address \t Channel #, \t SSID: "
                   << "\n";
 
         std::cout << temp_add << "\t" << ch << "\t" << apSsid.PeekString() << "\n" << std::endl;
@@ -227,7 +229,7 @@ main(int argc, char* argv[])
 
     double start_scanning = 2.0;
     double scan_duration = 1.0;
-    int rrm_channels_to_scan[3] = {36, 36, 36};
+    int rrm_channels_to_scan[3] = {36, 40, 44};
     // double snrThreshold = 60;
 
     double txgain = 0.0;
@@ -284,11 +286,14 @@ main(int argc, char* argv[])
     phy.Set("TxGain", DoubleValue(txgain));
     phy.Set("RxGain", DoubleValue(0));
     phy.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
-    // phy.Set("ShortGuardEnabled", BooleanValue(true)); // deprecated
-    phy.SetChannel("{36, 20, BAND_5GHZ, 0}");
     phy.Set("CcaEdThreshold", DoubleValue(CCAThreshold));
-    // create the channel object and associate to PHY layer object
+    // phy.Set("ShortGuardEnabled", BooleanValue(true)); // deprecated
+
+    // configure operating channel
     phy.SetChannel(channel.Create());
+    TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
+    value.Set(WifiPhy::ChannelTuple {36, 20, WIFI_PHY_BAND_5GHZ, 0});
+    phy.Set("ChannelSettings", value);
 
     // Set Wifi Standard
     WifiHelper wifi;
@@ -410,24 +415,29 @@ main(int argc, char* argv[])
     Ptr<RegularWifiMac> apMac1 =
         DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev1->GetMac()));
     apMac1->SetSsid(ssid1);
+    apMac1->GetWifiPhy()->SetOperatingChannel(std::make_tuple(36, 20, WIFI_PHY_BAND_5GHZ, 0));
+
 
     wifiapDevice[1] = wifi.Install(phy, mac, wifiApNode.Get(1)); // Add the mobile devices for AP2
     Ptr<WifiNetDevice> apNetDev2 = DynamicCast<WifiNetDevice>(wifiapDevice[1].Get(0));
     Ptr<RegularWifiMac> apMac2 =
         DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev2->GetMac()));
     apMac2->SetSsid(ssid2);
+    apMac2->GetWifiPhy()->SetOperatingChannel(std::make_tuple(36, 20, WIFI_PHY_BAND_5GHZ, 0));
 
     wifiapDevice[2] = wifi.Install(phy, mac, wifiApNode.Get(2)); // Add the mobile devices for AP3
     Ptr<WifiNetDevice> apNetDev3 = DynamicCast<WifiNetDevice>(wifiapDevice[2].Get(0));
     Ptr<RegularWifiMac> apMac3 =
         DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev3->GetMac()));
     apMac3->SetSsid(ssid3);
+    apMac3->GetWifiPhy()->SetOperatingChannel(std::make_tuple(40, 20, WIFI_PHY_BAND_5GHZ, 0));
 
     wifiapDevice[3] = wifi.Install(phy, mac, wifiApNode.Get(3)); // Add the mobile devices for AP4
     Ptr<WifiNetDevice> apNetDev4 = DynamicCast<WifiNetDevice>(wifiapDevice[3].Get(0));
     Ptr<RegularWifiMac> apMac4 =
         DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev4->GetMac()));
     apMac4->SetSsid(ssid4);
+    apMac4->GetWifiPhy()->SetOperatingChannel(std::make_tuple(44, 20, WIFI_PHY_BAND_5GHZ, 0));
 
     // Init mobility model. All nodes are stationary
     MobilityHelper mobility1;
@@ -440,7 +450,7 @@ main(int argc, char* argv[])
     positionAlloc1->Add(Vector(75.0, 10.0, 0.0));  // AP4
 
     positionAlloc1->Add(Vector(37.0, 15.0, 0.0)); // STA1
-    positionAlloc1->Add(Vector(40.0, 15.0, 0.0)); // STA1
+    positionAlloc1->Add(Vector(40.0, 15.0, 0.0)); // STA2
     mobility1.SetPositionAllocator(positionAlloc1);
 
     mobility1.SetMobilityModel(
@@ -541,11 +551,11 @@ main(int argc, char* argv[])
     PacketSinkHelper packetSinkHelper("ns3::TcpSocketFactory", Address());
     localaddress = Address(InetSocketAddress(Ipv4Address::GetAny(), port));
     packetSinkHelper.SetAttribute("Local", localaddress);
-    sink1.Add(packetSinkHelper.Install(wifiStaNode.Get(0))); // Install sinks on clients
+    sink1.Add(packetSinkHelper.Install(wifiStaNode.Get(0))); // Install sink on STA1
     sink1.Start(Seconds(15.0));
     sink1.Stop(Seconds(17.0));
 
-    sink2.Add(packetSinkHelper.Install(wifiStaNode.Get(1))); // Install sinks on clients
+    sink2.Add(packetSinkHelper.Install(wifiStaNode.Get(1))); // Install sink on STA2
     sink2.Start(Seconds(15.1));
     sink2.Stop(Seconds(17.0));
 
@@ -574,7 +584,28 @@ main(int argc, char* argv[])
     Simulator::Schedule(Seconds(5.1), &displayStnSnr, rriMod1);
 
     /******* end Client 1 *******************/
-    Simulator::Stop(Seconds(50.0));
+
+    /******* Client 2 *******************/
+    // Get pointer to the original station mac object for client 2
+    Ptr<WifiNetDevice> stNetDev3 = DynamicCast<WifiNetDevice>(wifistaDevice[2].Get(0));
+    Ptr<StaWifiMac> staMac2 = DynamicCast<StaWifiMac>(stNetDev3->GetMac());
+
+    // Get pointer to the measurement station mac object for client 2
+    Ptr<WifiNetDevice> stNetDev4 = DynamicCast<WifiNetDevice>(wifistaDevice[3].Get(0));
+    Ptr<RriModuleMac> rriMod2 = DynamicCast<RriModuleMac>(stNetDev4->GetMac());
+
+    // Display the measurement
+    Simulator::Schedule(Seconds(5.0), &displayStnSnr, rriMod2);
+    // Associate with AP with best Snr
+    Simulator::Schedule(Seconds(5.1), &AssociateWithBestSNR, staMac2, rriMod2);
+    Simulator::Schedule(Seconds(5.2), &displayStnSnr, rriMod2);
+
+    /******* end Client 2 *******************/
+
+
+
+
+    Simulator::Stop(Seconds(20.0));
 
     // This is to use the assoc trace source
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/$ns3::StaWifiMac/Assoc",
