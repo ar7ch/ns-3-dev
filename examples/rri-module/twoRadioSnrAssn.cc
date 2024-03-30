@@ -285,7 +285,7 @@ main(int argc, char* argv[])
     phy.Set("RxGain", DoubleValue(0));
     phy.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
     // phy.Set("ShortGuardEnabled", BooleanValue(true)); // deprecated
-    phy.SetChannel("{36, 40, BAND_5GHZ, 0}");
+    phy.SetChannel("{36, 20, BAND_5GHZ, 0}");
     phy.Set("CcaEdThreshold", DoubleValue(CCAThreshold));
     // create the channel object and associate to PHY layer object
     phy.SetChannel(channel.Create());

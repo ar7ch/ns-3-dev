@@ -127,193 +127,6 @@ RriModuleMac::ScheduleEvent(bool enable)
     /// Upto Here
 }
 
-//void RriModule::Receive(Ptr<Packet> packet, const WifiMacHeader* hdr)
-//
-// {
-//     NS_LOG_FUNCTION(this << packet << hdr);
-//     NS_ASSERT(!hdr->IsCtl());
-//
-//     /// Added by Kalpa
-//     Mac48Address temp_address;      // Added Code- UA
-//     temp_address = hdr->GetAddr2(); // Added Code -UA- to get the source address from hdr
-//
-//     // Added Code -UA
-//     SnrTag tag;
-//     double snrValue = 0.0;
-//     double SNRValueindB = 0.0;
-//
-//     // To retrieve the snr tag. Header files tag.h and snr-tag.h also added
-//     if (packet->PeekPacketTag(tag))
-//     {
-//         NS_LOG_DEBUG("Received Packet with SNR = " << tag.Get());
-//         snrValue = tag.Get();
-//         SNRValueindB = (10 * log10(snrValue));
-//     }
-//     /// Till here
-//
-//     if (hdr->GetAddr3() == GetAddress())
-//     {
-//         NS_LOG_LOGIC("packet sent by us.");
-//         return;
-//     }
-//
-//     /// Commented by KRISHNA: To make the Measruremnt MAC receive data sent to any other MAc
-//     /** else if (hdr->GetAddr1 () != GetAddress ()
-//               && !hdr->GetAddr1 ().IsGroup ())
-//        {
-//          NS_LOG_LOGIC ("packet is not for us");
-//          std::cout<<"Dropping packets  hdr->GetAddr1 () "<< "\t "<<hdr->GetAddr1() <<"
-//        hdr->GetAddr2" << "\t" << hdr->GetAddr2 ()<< "\n"; NotifyRxDrop (packet); return;
-//        }*/
-//
-//     else if (hdr->IsData())
-//     {
-//         /// Added by KRISHNA
-//
-//         /// For finding the load on AP. Client Logic
-//
-//         /// Whenever the client receives or sends data, it indicates that there is a communication
-//         /// between Client and AP. Store the ,channel number, mac address of client and AP in a
-//         /// datastructure
-//
-//         /// This condition is to eliminate olsr packets sent from AP or sent by Client. We do not
-//         /// want those packets as those olsr packets are also treated as data
-//
-//         if (hdr->GetAddr1() != "ff:ff:ff:ff:ff:ff" && hdr->GetAddr3() != "ff:ff:ff:ff:ff:ff")
-//         {
-//             /// std::cout << "From SCAN MAC: Channel = " << GetWifiPhy ()->GetChannelNumber () << "
-//             /// from header source Address = " << hdr->GetAddr2 () << "  from header destination
-//             /// Address = " << hdr->GetAddr1 () << "BSSID=  " << hdr->GetAddr3 () << std::endl;
-//             channel = GetWifiPhy()->GetChannelNumber();
-//             /// A condition to check who is the SENDER(whether AP or Client)
-//             if (hdr->IsFromDs()) /// SENDER IS AP
-//             {
-//                 ap_address = hdr->GetAddr2();
-//                 client_address = hdr->GetAddr1();
-//             }
-//             else /// SENDER IS CLIENT
-//             {
-//                 ap_address = hdr->GetAddr1();
-//                 client_address = hdr->GetAddr2();
-//             }
-//
-//             if (client_ap_channel.count(client_address))
-//             {
-//                 client_ap_channel.erase(client_ap_channel.find(client_address));
-//                 client_ap_channel[client_address].first = ap_address;
-//                 client_ap_channel[client_address].second = channel;
-//             }
-//             else
-//             {
-//                 client_ap_channel[client_address].first = ap_address;
-//                 client_ap_channel[client_address].second = channel;
-//             }
-//         }
-//         /// Upto Here
-//
-//         return;
-//     }
-//
-//     else if (hdr->IsBeacon())
-//     {
-//         MgtBeaconHeader beacon;
-//         packet->RemoveHeader(beacon);
-//
-//         /// Added by Kalpa
-//         /// Added Code - for AP Channel Selection. Receive beacons from all Aps. Store the AP Mac
-//         /// and the Channel No
-//         Mac48Address from = hdr->GetAddr2();
-//         if (from != GetAddress()) // If a beacon is from another AP
-//         {
-//             if (mapAPchn.count(from))
-//             {
-//                 mapAPchn.erase(mapAPchn.find(from));
-//                 mapAPchn[from] = GetWifiPhy()->GetChannelNumber();
-//             }
-//             else
-//                 mapAPchn[from] = GetWifiPhy()->GetChannelNumber();
-//         }
-//         /// Till here
-//
-//         /// Added by Kalpa - For Snr based UA
-//         double sum_of_elems = 0, snr_average = 0;
-//         if (snrlist.count(temp_address))
-//         {
-//             std::list<double> presentlist;
-//             presentlist = snrlist[temp_address];
-//             if (presentlist.size() >= 5) // To store only 5 values in the list
-//             {
-//                 presentlist.pop_front();
-//                 presentlist.push_back(SNRValueindB);
-//                 for (std::list<double>::iterator j = presentlist.begin(); j != presentlist.end();
-//                      ++j)
-//                 {
-//                     sum_of_elems = sum_of_elems + *j; // To get average
-//                 }
-//             }
-//             else // If count is less than 5, simply push
-//             {
-//                 presentlist.push_back(SNRValueindB);
-//                 for (std::list<double>::iterator j = presentlist.begin(); j != presentlist.end();
-//                      ++j)
-//                 {
-//                     sum_of_elems = sum_of_elems + *j;
-//                 }
-//             }
-//
-//             snrlist.erase(snrlist.find(temp_address));
-//             snrlist[temp_address] = presentlist;
-//             snr_average = sum_of_elems / presentlist.size();
-//         }
-//         else // Create new entry if not present in list already
-//         {
-//             std::list<double> presentlist;
-//             presentlist.push_back(SNRValueindB);
-//             snrlist[temp_address] = presentlist;
-//             snr_average = SNRValueindB;
-//         }
-//
-//         // The final average value of last 5 beacons from snrlist map is added to mapbsssnr.
-//         //  AP address is not present in list, new entry is created. Also store the SSid of AP
-//
-//         Ssid apSsid;
-//         apSsid = beacon.GetSsid();
-//         if (mapapSnrSsid.count(temp_address))
-//         {
-//             mapapSnrSsid.erase(mapapSnrSsid.find(temp_address));
-//             mapapSnrSsid[temp_address].first = snr_average;
-//             mapapSnrSsid[temp_address].second = apSsid;
-//         }
-//         else
-//         {
-//             mapapSnrSsid[temp_address].first = snr_average;
-//             mapapSnrSsid[temp_address].second = apSsid;
-//         }
-//         /// Till here
-//
-//         /// Added by KRISHNA: For TPC Logic
-//         double noise = -93.966;
-//         double m_RSSI = snr_average + noise;
-//
-//         if (mac_rssi.count(temp_address))
-//         {
-//             mac_rssi.erase(mac_rssi.find(temp_address));
-//             mac_rssi[temp_address] = m_RSSI;
-//         }
-//         else
-//         {
-//             mac_rssi[temp_address] = m_RSSI;
-//         }
-//         /// Upto here by KRISHNA
-//
-//         return;
-//     }
-//
-//     // Invoke the receive handler of our parent class to deal with any
-//     // other frames. Specifically, this will handle Block Ack-related
-//     // Management Action frames.
-//     RegularWifiMac::Receive(packet, hdr);
-// }
 void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
 {
     NS_LOG_FUNCTION(this << mpdu);
@@ -421,6 +234,7 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
             else {
                 mapAPchn[from] = GetWifiPhy()->GetChannelNumber();
             }
+
         }
         /// Till here
 
@@ -517,13 +331,14 @@ RriModuleMac::Scan()
 
     /* from artem: simply using channel number as integer is not possible anymore */
     WifiPhyOperatingChannel channel;
-    const uint16_t ch = chnl[choice];
+    const uint16_t ch = channelsToScan[choice];
     choice++;
     constexpr uint16_t chan_freq = 0;
     constexpr uint16_t width = 20;
     constexpr WifiPhyBand band = WIFI_PHY_BAND_5GHZ;
     constexpr WifiStandard standard = WIFI_STANDARD_80211ac;
     channel.Set(ch, chan_freq, width, standard, band);
+    cout << "RRI module: switch to scanning channel" << ch << endl;
     GetWifiPhy()->SetOperatingChannel(channel);
 
     // std::cout<<GetWifiPhy ()->GetChannelNumber()<<std::endl;
@@ -538,7 +353,7 @@ void
 RriModuleMac::setChanneltoScan(int* chnlNos)
 {
     // for (int i=0; i < size; i++)
-    chnl = chnlNos;
+    channelsToScan = chnlNos;
     // std::cout<< "From Setchannel " << chnl[0] << "\t"  << chnl[1] << "\t"  << chnl[2] << "\t" <<
     // "\n";
 }
