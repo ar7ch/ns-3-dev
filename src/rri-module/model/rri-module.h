@@ -108,7 +108,7 @@ private:
   Time m_startscan;//Added code - Attribute for  Triggering the scan function at specific time
   Time m_scanduration;//Added Code - Attribute for duration for scanning each channel
   int choice; //Added Code-Scanning - To choose the  channels to scan
-  int  *chnl; // Added Code - To get the channel number from the array
+  int  *channelsToScan; // Added Code - To get the channel number from the array
   /// Till here
 
    ///Added by KRISHNA
