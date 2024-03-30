@@ -84,7 +84,7 @@ public:
 
    // For AP Scanning
    void UpdateChannelLoad();
-   std::map <Mac48Address,int> mapAPchn; //Added Code -Channel Selection- Map to store the channel number of each AP
+   std::map <Mac48Address,int> map_ap_channel; //Added Code -Channel Selection- Map to store the channel number of each AP
    std::map <int,int> mapchnload; //Added Code -Channel Selection- Map to store number of APs in each channel
   /// Till here
 
