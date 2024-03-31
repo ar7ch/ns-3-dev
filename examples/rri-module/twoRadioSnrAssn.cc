@@ -97,55 +97,48 @@ TraceAssoc(std::string context, Mac48Address bssid)
 static void
 TraceDeassoc(std::string context, Mac48Address bssid)
 {
-    NS_LOG_INFO("Deassociation at " << Simulator::Now().GetSeconds() << " from " << bssid);
+    NS_LOG_INFO("Deassociation at " << Simulator::Now().GetSeconds() << " from " << bssid << context);
 }
 
 // Function to display the map containing average SNR values of last 5 beacons.
 // We display both MAC of Aps and the average snr values.
 // Also display the Aps and the channel number of the Aps
 void
-displayStnSnr(Ptr<RriModuleMac> rriMod)
+rriModStaSnrData(Ptr<RriModuleMac> rriMod)
 {
     int chNo;
     Ssid apSsid;
     char* ssidVal;
 
     cout << endl;
-    cout << "For Client scanned Radio Mac Address = " << rriMod->GetAddress() << endl;
-    cout << "-------------------------------------------------------------" << endl;
 
-    std::map<Mac48Address, std::pair<double, Ssid>> mapapSnrSsid = rriMod->mapapSnrSsid;
-
-    /* Create an iterator, much like vector iterators */
-    std::map<Mac48Address, std::pair<double, Ssid>>::iterator it1;
-    std::map<Mac48Address, int>::iterator it2;
+    std::map<Mac48Address, std::pair<double, Ssid>> map_ApSnrSsid = rriMod->map_ApSnrSsid;
 
     /* Test in APChnl Map */
     std::map<Mac48Address, int> map_ap_channel = rriMod->map_ap_channel;
 
-    cout << "AP Mac Address : \t  Channel No  " << endl;
-    cout << "---------------------------------" << endl;
-    for (it2 = map_ap_channel.begin(); it2 != map_ap_channel.end(); ++it2)
-    {
-        cout << setw(20) << it2->first << setw(10) << it2->second << "\n";
-    }
+    // cout << "AP Mac Address   \tChannel #" << endl;
+    // cout << "-------------------------------------------------------------" << endl;
+    // for (auto it = map_ap_channel.begin(); it != map_ap_channel.end(); ++it)
+    // {
+    //     cout << setw(20) << it->first << setw(10) << it->second << "\n";
+    // }
 
     cout << endl;
-    cout << "\tTotal size of Mapbssnr : " << mapapSnrSsid.size() << endl; /* Output the size */
-
-    cout << "AP Mac Address : \t  Av Snr \t Channel No \t  Ssid" << endl;
-    cout << "------------------------------------------------------- --------" << endl;
-    cout << endl;
-    for (it1 = mapapSnrSsid.begin(); it1 != mapapSnrSsid.end(); ++it1)
+    cout << "Scan results for " << rriMod->cpeId << " (" << rriMod->GetAddress() << ")" << endl;
+    cout << "Entries: " << map_ApSnrSsid.size() << endl;
+    cout << "BSSID   \t   Avg SNR \t Channel# \t  SSID" << endl;
+    cout << "------------------------------------------------ --------" << endl;
+    for (auto it = map_ApSnrSsid.begin(); it != map_ApSnrSsid.end(); ++it)
     {
-        chNo = map_ap_channel[it1->first];
+        chNo = map_ap_channel[it->first];
 
-        apSsid = it1->second.second;
+        apSsid = it->second.second;
         ssidVal = apSsid.PeekString();
 
         /* Output first , macid , snr value , channel no, ssid */
-        cout << setw(20) << it1->first << "\t" << setw(10) << it1->second.first << " \t \t" << chNo
-             << "\t" << ssidVal << "\n";
+        cout << setw(15) << it->first << setw(10) << it->second.first << " \t " << chNo
+             << "\t\t" << ssidVal << "\n";
     }
 
     cout << endl; /* Print a new line */
@@ -155,22 +148,20 @@ displayStnSnr(Ptr<RriModuleMac> rriMod)
 void
 AssociateWithBestSNR(Ptr<StaWifiMac> staMac1, Ptr<RriModuleMac> rriMod)
 {
-    std::cout << "\n";
-    std::cout << "*************************** ";
-    std::cout << "\n";
+    // std::cout << "\n";
+    // std::cout << "*************************** ";
+    // std::cout << "\n";
 
     // Get access to the mapapSnrSsid data structure of the client from the new mac
-    std::map<Mac48Address, std::pair<double, Ssid>> mapapSnrSsid = rriMod->mapapSnrSsid;
+    std::map<Mac48Address, std::pair<double, Ssid>> map_Ap_SnrSsid = rriMod->map_ApSnrSsid;
     std::map<Mac48Address, int> mapAPchn = rriMod->map_ap_channel;
-
-    std::map<Mac48Address, std::pair<double, Ssid>>::iterator it1;
 
     Mac48Address temp_add;
     double max = 0;
-    for (it1 = mapapSnrSsid.begin(); it1 != mapapSnrSsid.end(); ++it1)
+    for (auto it1 = map_Ap_SnrSsid.begin(); it1 != map_Ap_SnrSsid.end(); ++it1)
     {
-        std::cout << "MAC Address Of AP: " << it1->first << " ; "
-                  << "SINR Value: " << it1->second.first << std::endl;
+        NS_LOG_DEBUG("BSSID: " << it1->first << " ; "
+                  << "SINR Value: " << it1->second.first << std::endl);
         // Check the SNR value
         if ((it1->second.first) > max)
         {
@@ -178,7 +169,6 @@ AssociateWithBestSNR(Ptr<StaWifiMac> staMac1, Ptr<RriModuleMac> rriMod)
             max = it1->second.first;
         }
     }
-    std::cout << "\n";
     /* from artem: GetBssid API changed since this code was written;
      * now it expects link_id.
      * given that our stations keeps strictly 1 link (to an AP) at a time, I can fetch it from the GetLinkIds map */
@@ -188,7 +178,7 @@ AssociateWithBestSNR(Ptr<StaWifiMac> staMac1, Ptr<RriModuleMac> rriMod)
 
     if (temp_add != staMac1->GetBssid(link_id))
     {
-        Ssid apSsid = mapapSnrSsid[temp_add].second;
+        Ssid apSsid = map_Ap_SnrSsid[temp_add].second;
 
         int ch = mapAPchn[temp_add];
         /* from artem: simply using channel number as integer is not possible anymore */
@@ -199,18 +189,11 @@ AssociateWithBestSNR(Ptr<StaWifiMac> staMac1, Ptr<RriModuleMac> rriMod)
         // channel.Set(ch, chan_freq, width, USED_80211_STANDARD, band);
 
         WifiPhy::ChannelTuple channel = std::make_tuple(ch, width, band, primary20idx);
-        std::cout << "Setting channel to " << ch << endl;
+        std::cout << rriMod->cpeId << ": setting channel to " << ch << endl;
         staMac1->GetWifiPhy()->SetOperatingChannel(channel);
         // phy.SetChannel("{36, 20, BAND_5GHZ, 0}"); // this only works on helper
-
         // Associate to the AP using ssid
-        std::cout << "Client associating to AP with maximum SNR: " << max << "\n";
-        std::cout << "****************************************************" << std::endl;
-
-        std::cout << " MAC address \t Channel #, \t SSID: "
-                  << "\n";
-
-        std::cout << temp_add << "\t" << ch << "\t" << apSsid.PeekString() << "\n" << std::endl;
+        std::cout << rriMod->cpeId << ": assoc to SSID=" << apSsid.PeekString() << "(BSSID=" << temp_add << "), " << "with max SNR=" << max << "\n";
 
         Ptr<RegularWifiMac> regStmac = DynamicCast<RegularWifiMac>(staMac1);
         regStmac->SetSsid(apSsid);
@@ -229,6 +212,12 @@ main(int argc, char* argv[])
 
     double start_scanning = 2.0;
     double scan_duration = 1.0;
+
+    CommandLine cmd;
+    cmd.AddValue("StartRRM", "Start Time of RRI Module (in seconds)", start_scanning);
+    cmd.AddValue("ScanDuration", "Duration to stay in channel (in seconds)", scan_duration);
+    cmd.Parse(argc, argv);
+
     int rrm_channels_to_scan[3] = {36, 40, 44};
     // double snrThreshold = 60;
 
@@ -236,29 +225,22 @@ main(int argc, char* argv[])
     double PathLossExponent = 3.5;
     double CCAThreshold = -85.0;
 
-    CommandLine cmd;
-    cmd.AddValue("StartRRM", "Start Time of RRI Module", start_scanning);
-    cmd.AddValue("ScanDurtion", "Duration to stay in channel", scan_duration);
-    cmd.Parse(argc, argv);
+    constexpr int SERVER_COUNT = 1;
+    constexpr int STA_COUNT = 2;
+    constexpr int STA_NETDEVS_COUNT = STA_COUNT * 2; // each station has main netdev and scanning netdev
+    constexpr int AP_COUNT = 4;
 
     NS_LOG_INFO("Create 4 nodes.");
 
-    // server node
-    NodeContainer ServerNode;
-    ServerNode.Create(1);
-
-    // Create Wi-Fi APs and stations
-    NodeContainer wifiApNode; // Container for 4 APs
-    wifiApNode.Create(4);
-
-    NodeContainer wifiStaNode;
-    wifiStaNode.Create(2); // 2 STAs
+    NodeContainer ServerNode(SERVER_COUNT);
+    NodeContainer wifiAPnodes(AP_COUNT);
+    NodeContainer wifiSTAnodes(STA_COUNT);
 
     // Create p2p links from each AP to Server
-    NodeContainer n0n1 = NodeContainer(ServerNode.Get(0), wifiApNode.Get(0)); // server and Ap1
-    NodeContainer n0n2 = NodeContainer(ServerNode.Get(0), wifiApNode.Get(1)); // server and Ap2
-    NodeContainer n0n3 = NodeContainer(ServerNode.Get(0), wifiApNode.Get(2)); // server and Ap3
-    NodeContainer n0n4 = NodeContainer(ServerNode.Get(0), wifiApNode.Get(3)); // server and Ap4
+    NodeContainer n0n1 = NodeContainer(ServerNode.Get(0), wifiAPnodes.Get(0)); // server and Ap1
+    NodeContainer n0n2 = NodeContainer(ServerNode.Get(0), wifiAPnodes.Get(1)); // server and Ap2
+    NodeContainer n0n3 = NodeContainer(ServerNode.Get(0), wifiAPnodes.Get(2)); // server and Ap3
+    NodeContainer n0n4 = NodeContainer(ServerNode.Get(0), wifiAPnodes.Get(3)); // server and Ap4
 
     PointToPointHelper p2p;
     p2p.SetDeviceAttribute("DataRate", StringValue("1Gbps"));
@@ -282,18 +264,18 @@ main(int argc, char* argv[])
                                "Exponent",
                                DoubleValue(PathLossExponent));
 
-    YansWifiPhyHelper phy = YansWifiPhyHelper();
-    phy.Set("TxGain", DoubleValue(txgain));
-    phy.Set("RxGain", DoubleValue(0));
-    phy.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
-    phy.Set("CcaEdThreshold", DoubleValue(CCAThreshold));
+    YansWifiPhyHelper wiPhy = YansWifiPhyHelper();
+    wiPhy.Set("TxGain", DoubleValue(txgain));
+    wiPhy.Set("RxGain", DoubleValue(0));
+    wiPhy.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
+    wiPhy.Set("CcaEdThreshold", DoubleValue(CCAThreshold));
     // phy.Set("ShortGuardEnabled", BooleanValue(true)); // deprecated
 
     // configure operating channel
-    phy.SetChannel(channel.Create());
+    wiPhy.SetChannel(channel.Create());
     TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
     value.Set(WifiPhy::ChannelTuple {36, 20, WIFI_PHY_BAND_5GHZ, 0});
-    phy.Set("ChannelSettings", value);
+    wiPhy.Set("ChannelSettings", value);
 
     // Set Wifi Standard
     WifiHelper wifi;
@@ -311,155 +293,121 @@ main(int argc, char* argv[])
 
     // Set HT Wi-Fi MAC
 
-    WifiMacHelper mac = WifiMacHelper();
-    WifiMacHelper msrmac = WifiMacHelper();
+    WifiMacHelper wifiMac;
+    WifiMacHelper scanMac;
 
-    NetDeviceContainer wifistaDevice[4];
-    Ssid ssid1 = Ssid("AP1");
-    Ssid ssid2 = Ssid("AP2");
-    Ssid ssid3 = Ssid("AP3");
-    Ssid ssid4 = Ssid("AP4");
-    Ssid ssid5 = Ssid("invalid");
+    NetDeviceContainer staNetDev[STA_NETDEVS_COUNT];
 
-    /******** Client 1 in ssid AP3 ************/
+    Ssid ssids[] = {Ssid("AP1"), Ssid("AP2"), Ssid("AP3"), Ssid("AP4"), Ssid("invalid")};
 
-    mac.SetType("ns3::StaWifiMac",
-                "Ssid",
-                SsidValue(ssid5),
-                "ActiveProbing",
-                BooleanValue(false),
-                "QosSupported",
-                BooleanValue(true));
+    auto setupStaMainMac = [&](int sta_i, Ssid ssid) {
+        char macAddr[18] = {0};
+        sprintf(macAddr, "00:55:55:55:%02x:%02x", sta_i / 256, sta_i % 256);
+        wifiMac.SetType("ns3::StaWifiMac",
+                        "Ssid",
+                        SsidValue(ssid),
+                        "ActiveProbing",
+                        BooleanValue(false),
+                        "QosSupported",
+                        BooleanValue(true));
+        wiPhy.Set("TxPowerStart", DoubleValue(17.0));
+        wiPhy.Set("TxPowerEnd", DoubleValue(17.0));
+        staNetDev[2*sta_i] = wifi.Install(wiPhy, wifiMac, wifiSTAnodes.Get(sta_i));
+        // Ptr<StaWifiMac> apMac = DynamicCast<StaWifiMac>((apNetDev->GetMac()));
+    };
 
-    phy.Set("TxPowerStart", DoubleValue(17.0));
-    phy.Set("TxPowerEnd", DoubleValue(17.0));
-    // Install Wi-Fi device on the STA Node
-    wifistaDevice[0] = wifi.Install(phy, mac, wifiStaNode.Get(0)); // Orig Mac
+    auto setupStaScanMac = [&](int sta_i) {
+        scanMac.SetType("ns3::RriModuleMac",
+                        "GetLoadUpdates",
+                        BooleanValue(false),
+                        "StartTime",
+                        TimeValue(Seconds(start_scanning)),
+                        "ScanDuration",
+                        TimeValue(Seconds(scan_duration)));
+        // Install the Measurement MAC on STA Node
+        staNetDev[2*sta_i + 1] = wifi.Install(wiPhy, scanMac, wifiSTAnodes.Get(sta_i));
+        Ptr<WifiNetDevice> wifiNet = DynamicCast<WifiNetDevice>(staNetDev[2*sta_i + 1].Get(0));
+        // Set the netdev of the measurement mac to promisc mode to receive data packets meant to device 1
+        wifiNet->GetMac()->SetPromisc();
+        // Pass to the scanning module the list of channels to scan
+        Ptr<RriModuleMac> rriMod = DynamicCast<RriModuleMac>(wifiNet->GetMac());
+        rriMod->setChanneltoScan(rrm_channels_to_scan);
+        rriMod->cpeId = "STA" + std::to_string(sta_i + 1);
+    };
 
-    msrmac.SetType("ns3::RriModuleMac",
-                   "GetLoadUpdates",
-                   BooleanValue(false),
-                   "StartTime",
-                   TimeValue(Seconds(start_scanning)),
-                   "ScanDuration",
-                   TimeValue(Seconds(scan_duration)));
-    // Install the Measurement MAC on STA Node
-    wifistaDevice[1] = wifi.Install(phy, msrmac, wifiStaNode.Get(0)); // Measurement MAC
-
-    // Set the NetDevice of the measurement mac to promiscous mode to receive data packets meant to device 1
-    Ptr<WifiNetDevice> wifiNet = DynamicCast<WifiNetDevice>(wifistaDevice[1].Get(0));
-    wifiNet->GetMac()->SetPromisc();
-
-    Ptr<RriModuleMac> rriMod = DynamicCast<RriModuleMac>(wifiNet->GetMac());
-
-    // Call function on the scanned mac radio to pass list of channels to scan
-    rriMod->setChanneltoScan(rrm_channels_to_scan);
-
-    /****** end setup for STA 1 ***********/
-
-    /******** start setup for STA 2  ************/
-
-    mac.SetType("ns3::StaWifiMac",
-                "Ssid",
-                SsidValue(ssid1),
-                "ActiveProbing",
-                BooleanValue(false),
-                "QosSupported",
-                BooleanValue(true));
-
-    phy.Set("TxPowerStart", DoubleValue(17.0));
-    phy.Set("TxPowerEnd", DoubleValue(17.0));
-    wifistaDevice[2] = wifi.Install(phy, mac, wifiStaNode.Get(1)); // Orig Mac
-
-    /// Install the Measuremnt Mac  on  client Node
-
-    msrmac.SetType("ns3::RriModuleMac",
-                   "GetLoadUpdates",
-                   BooleanValue(false),
-                   "StartTime",
-                   TimeValue(Seconds(start_scanning)),
-                   "ScanDuration",
-                   TimeValue(Seconds(scan_duration)));
-    wifistaDevice[3] = wifi.Install(phy, msrmac, wifiStaNode.Get(1)); // Msr Mac
-
-    // Set the NetDevice of the msr mac to promiscous mode to receive data packets meant to device 1
-    wifiNet = DynamicCast<WifiNetDevice>(wifistaDevice[3].Get(0));
-    wifiNet->GetMac()->SetPromisc();
-
-    rriMod = DynamicCast<RriModuleMac>(wifiNet->GetMac());
-
-    // Call function on the scanned mac radio to pass list of channels to scan
-    rriMod->setChanneltoScan(rrm_channels_to_scan);
-
-    /****** end setup STA 2 ***********/
+    /* setup STAs */
+    NS_LOG_INFO("Setup STAs.");
+    for (int i = 0; i < 2; i++) {
+        setupStaMainMac(i, ssids[i]);
+        setupStaScanMac(i);
+    }
 
     /* Setting Attributes for AP */
-
-    mac.SetType("ns3::ApWifiMac",
-                "Ssid",
-                SsidValue(ssid1),
-                "BeaconGeneration",
-                BooleanValue(true),
-                "BeaconInterval",
-                TimeValue(MicroSeconds(102400)),
-                "QosSupported",
-                BooleanValue(true));
-
+    NS_LOG_INFO("Setup APs.");
     NetDeviceContainer wifiapDevice[4];
+    wiPhy.Set("TxPowerStart", DoubleValue(23.0));
+    wiPhy.Set("TxPowerEnd", DoubleValue(23.0));
 
-    // APs 1,2,3,4 are in channels 36,36,40 and 44 respectively
-    phy.Set("TxPowerStart", DoubleValue(23.0));
-    phy.Set("TxPowerEnd", DoubleValue(23.0));
-    wifiapDevice[0] = wifi.Install(phy, mac, wifiApNode.Get(0)); // Add the mobile devices for AP1
-    Ptr<WifiNetDevice> apNetDev1 = DynamicCast<WifiNetDevice>(wifiapDevice[0].Get(0));
-    Ptr<RegularWifiMac> apMac1 =
-        DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev1->GetMac()));
-    apMac1->SetSsid(ssid1);
-    apMac1->GetWifiPhy()->SetOperatingChannel(std::make_tuple(36, 20, WIFI_PHY_BAND_5GHZ, 0));
+    auto setupAp = [&](int ap_i, Ssid ssid, unsigned long beaconInterval=102400) {
+        wifiMac.SetType("ns3::ApWifiMac",
+                        "Ssid",
+                        SsidValue(ssid),
+                        "BeaconGeneration",
+                        BooleanValue(true),
+                        "BeaconInterval",
+                        TimeValue(MicroSeconds(beaconInterval)),
+                        "QosSupported",
+                        BooleanValue(true));
+        wifiapDevice[ap_i] = wifi.Install(wiPhy, wifiMac, wifiAPnodes.Get(ap_i));
+        Ptr<WifiNetDevice> apNetDev = DynamicCast<WifiNetDevice>(wifiapDevice[ap_i].Get(0));
+        Ptr<RegularWifiMac> apMac = DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev->GetMac()));
+        apMac->SetSsid(ssid);
+    };
 
+    auto setupApChannel = [&](int ap_i, int channel, int width, WifiPhyBand band, int primary20idx=0) {
+        Ptr<WifiNetDevice> apNetDev = DynamicCast<WifiNetDevice>(wifiapDevice[ap_i].Get(0));
+        Ptr<RegularWifiMac> apMac = DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev->GetMac()));
+        apMac->GetWifiPhy()->SetOperatingChannel(std::make_tuple(channel, 20, WIFI_PHY_BAND_5GHZ, primary20idx));
+        char bssid[18] = {0};
+        sprintf(bssid, "00:11:11:11:%02x:%02x", ap_i / 256, ap_i % 256);
+        apMac->SetBssid(Mac48Address(bssid), 0);
+    };
 
-    wifiapDevice[1] = wifi.Install(phy, mac, wifiApNode.Get(1)); // Add the mobile devices for AP2
-    Ptr<WifiNetDevice> apNetDev2 = DynamicCast<WifiNetDevice>(wifiapDevice[1].Get(0));
-    Ptr<RegularWifiMac> apMac2 =
-        DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev2->GetMac()));
-    apMac2->SetSsid(ssid2);
-    apMac2->GetWifiPhy()->SetOperatingChannel(std::make_tuple(36, 20, WIFI_PHY_BAND_5GHZ, 0));
+    int apStartingChannels[] = {36, 36, 40, 44};
 
-    wifiapDevice[2] = wifi.Install(phy, mac, wifiApNode.Get(2)); // Add the mobile devices for AP3
-    Ptr<WifiNetDevice> apNetDev3 = DynamicCast<WifiNetDevice>(wifiapDevice[2].Get(0));
-    Ptr<RegularWifiMac> apMac3 =
-        DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev3->GetMac()));
-    apMac3->SetSsid(ssid3);
-    apMac3->GetWifiPhy()->SetOperatingChannel(std::make_tuple(40, 20, WIFI_PHY_BAND_5GHZ, 0));
+    for (int i = 0; i < 4; i++) {
+        setupAp(i, ssids[i]);
+        setupApChannel(i, apStartingChannels[i], 20, WIFI_PHY_BAND_5GHZ);
+    }
 
-    wifiapDevice[3] = wifi.Install(phy, mac, wifiApNode.Get(3)); // Add the mobile devices for AP4
-    Ptr<WifiNetDevice> apNetDev4 = DynamicCast<WifiNetDevice>(wifiapDevice[3].Get(0));
-    Ptr<RegularWifiMac> apMac4 =
-        DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(apNetDev4->GetMac()));
-    apMac4->SetSsid(ssid4);
-    apMac4->GetWifiPhy()->SetOperatingChannel(std::make_tuple(44, 20, WIFI_PHY_BAND_5GHZ, 0));
+    NS_LOG_INFO("Init mobility model.");
 
     // Init mobility model. All nodes are stationary
     MobilityHelper mobility1;
-    Ptr<ListPositionAllocator> positionAlloc1 = CreateObject<ListPositionAllocator>();
-
-    positionAlloc1->Add(Vector(100.0, 20.0, 0.0)); // Server position
-    positionAlloc1->Add(Vector(0.0, 10.0, 0.0));   // AP1
-    positionAlloc1->Add(Vector(25.0, 10.0, 0.0));  // AP2
-    positionAlloc1->Add(Vector(50.0, 10.0, 0.0));  // AP3
-    positionAlloc1->Add(Vector(75.0, 10.0, 0.0));  // AP4
-
-    positionAlloc1->Add(Vector(37.0, 15.0, 0.0)); // STA1
-    positionAlloc1->Add(Vector(40.0, 15.0, 0.0)); // STA2
-    mobility1.SetPositionAllocator(positionAlloc1);
-
     mobility1.SetMobilityModel(
         "ns3::ConstantPositionMobilityModel"); // For stationary APs Aand client
-    mobility1.Install(ServerNode);
-    mobility1.Install(wifiApNode);
-    mobility1.Install(wifiStaNode.Get(0)); // 1 Client and 3 Aps are stationary
+    Ptr<ListPositionAllocator> positionAlloc1 = CreateObject<ListPositionAllocator>();
 
-    mobility1.Install(wifiStaNode.Get(1)); // 2 Client
+    Vector positions[] = {
+        Vector(100.0, 20.0, 0.0), // Server position
+        Vector(0.0, 10.0, 0.0),   // AP1
+        Vector(25.0, 10.0, 0.0),  // AP2
+        Vector(50.0, 10.0, 0.0),  // AP3
+        Vector(75.0, 10.0, 0.0),  // AP4
+        Vector(37.0, 15.0, 0.0),  // STA1
+        Vector(40.0, 15.0, 0.0)   // STA2
+    };
+
+    for (auto& pos : positions) {
+        positionAlloc1->Add(pos);
+    }
+
+    mobility1.SetPositionAllocator(positionAlloc1);
+
+    mobility1.Install(ServerNode);
+    mobility1.Install(wifiAPnodes);
+    mobility1.Install(wifiSTAnodes);
+    // TODO: make station roam between APs
 
     // Using OLSR routing protocol
     OlsrHelper olsr;
@@ -473,8 +421,8 @@ main(int argc, char* argv[])
     stack.SetRoutingHelper(list);
 
     stack.Install(ServerNode);
-    stack.Install(wifiStaNode);
-    stack.Install(wifiApNode);
+    stack.Install(wifiSTAnodes);
+    stack.Install(wifiAPnodes);
 
     NS_LOG_INFO("Assign IP Addresses.");
 
@@ -496,17 +444,15 @@ main(int argc, char* argv[])
 
     // Assign IP address to the 2 interfaces on station nodes
     address.SetBase("10.1.5.0", "255.255.255.0");
-    Ipv4InterfaceContainer StaInterface[4];
-    StaInterface[0] = address.Assign(wifistaDevice[0]); // Orig Mac
-    StaInterface[1] = address.Assign(wifistaDevice[1]); // Msr Mac
-    StaInterface[2] = address.Assign(wifistaDevice[2]); // Orig Mac
-    StaInterface[3] = address.Assign(wifistaDevice[3]); // Msr Mac
+    Ipv4InterfaceContainer StaInterface[STA_NETDEVS_COUNT];
+    for (int i = 0; i < STA_NETDEVS_COUNT; i++) {
+        StaInterface[i] = address.Assign(staNetDev[i]);
+    }
 
-    Ipv4InterfaceContainer ApInterface[4];
-    ApInterface[0] = address.Assign(wifiapDevice[0]);
-    ApInterface[1] = address.Assign(wifiapDevice[1]);
-    ApInterface[2] = address.Assign(wifiapDevice[2]);
-    ApInterface[3] = address.Assign(wifiapDevice[3]);
+    Ipv4InterfaceContainer ApInterface[AP_COUNT];
+    for (int i = 0; i < AP_COUNT; i++) {
+        ApInterface[i] = address.Assign(wifiapDevice[i]);
+    }
 
     // Data connections from Server to client
     NS_LOG_INFO("Create Applications.");
@@ -515,7 +461,6 @@ main(int argc, char* argv[])
     // Install the ON/OFF application downlink
     ApplicationContainer sourceApp1;
     ApplicationContainer sourceApp2;
-    // OnOffHelper onoff("ns3::UdpSocketFactory", Address());
 
     BulkSendHelper onoff("ns3::TcpSocketFactory", Address());
     onoff.SetAttribute("MaxBytes", UintegerValue(0));
@@ -541,21 +486,19 @@ main(int argc, char* argv[])
     sourceApp2.Stop(Seconds(17.0));
 
     // Create an optional packet sink to receive these packets on
-
     ApplicationContainer sink1;
     ApplicationContainer sink2;
 
-    // PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", Address ());
     AddressValue localaddress;
 
     PacketSinkHelper packetSinkHelper("ns3::TcpSocketFactory", Address());
     localaddress = Address(InetSocketAddress(Ipv4Address::GetAny(), port));
     packetSinkHelper.SetAttribute("Local", localaddress);
-    sink1.Add(packetSinkHelper.Install(wifiStaNode.Get(0))); // Install sink on STA1
+    sink1.Add(packetSinkHelper.Install(wifiSTAnodes.Get(0))); // Install sink on STA1
     sink1.Start(Seconds(15.0));
     sink1.Stop(Seconds(17.0));
 
-    sink2.Add(packetSinkHelper.Install(wifiStaNode.Get(1))); // Install sink on STA2
+    sink2.Add(packetSinkHelper.Install(wifiSTAnodes.Get(1))); // Install sink on STA2
     sink2.Start(Seconds(15.1));
     sink2.Stop(Seconds(17.0));
 
@@ -564,71 +507,69 @@ main(int argc, char* argv[])
     Ptr<OutputStreamWrapper> stream = ascii.CreateFileStream("twoRadio.tr");
     stack.EnableAsciiIpv4All(stream);
 
-    phy.EnablePcapAll("twoRadio");
+    wiPhy.EnablePcapAll("twoRadio");
     AnimationInterface anim("twoRadio.xml");
 
-    /******* Client 1 *******************/
-    // Get pointer to the original station mac object for client 1
-    Ptr<WifiNetDevice> stNetDev1 = DynamicCast<WifiNetDevice>(wifistaDevice[0].Get(0));
-    Ptr<StaWifiMac> staMac1 = DynamicCast<StaWifiMac>(stNetDev1->GetMac());
+    auto setupAPAnimation = [&](int i) {
+        anim.UpdateNodeColor(wifiAPnodes.Get(i), 255, 0, 0); // red
+        anim.UpdateNodeSize(wifiAPnodes.Get(i)->GetId(), 5.0, 5.0);
+        anim.UpdateNodeDescription(wifiAPnodes.Get(i), "AP" + std::to_string(i + 1));
+    };
 
-    // Get pointer to the measurement station mac object for client 1
-    Ptr<WifiNetDevice> stNetDev2 = DynamicCast<WifiNetDevice>(wifistaDevice[1].Get(0));
-    Ptr<RriModuleMac> rriMod1 = DynamicCast<RriModuleMac>(stNetDev2->GetMac());
+    for (int i = 0; i < AP_COUNT; i++) {
+        setupAPAnimation(i);
+    }
 
-    // Display the measurement
-    Simulator::Schedule(Seconds(4.9), &displayStnSnr, rriMod1);
-    // Associate with AP with best Snr
-    Simulator::Schedule(Seconds(5), &AssociateWithBestSNR, staMac1, rriMod1);
+    auto setupSTAAnimation = [&](int i) {
+        anim.UpdateNodeColor(wifiSTAnodes.Get(i), 0, 255, 0); // green
+        anim.UpdateNodeSize(wifiSTAnodes.Get(i)->GetId(), 5.0, 5.0);
+        anim.UpdateNodeDescription(wifiSTAnodes.Get(i), "STA" + std::to_string(i + 1));
+    };
 
-    Simulator::Schedule(Seconds(5.1), &displayStnSnr, rriMod1);
+    for (int i = 0; i < STA_COUNT; i++) {
+        setupSTAAnimation(i);
+    }
 
-    /******* end Client 1 *******************/
+    auto scheduleClients = [&](int sta_i, double reassocPeriod, double delta) {
+        // Get pointer to the original station mac object for client
+        Ptr<WifiNetDevice> staNetDevMain = DynamicCast<WifiNetDevice>(staNetDev[2*sta_i].Get(0));
+        Ptr<StaWifiMac> staMacMain = DynamicCast<StaWifiMac>(staNetDevMain->GetMac());
 
-    /******* Client 2 *******************/
-    // Get pointer to the original station mac object for client 2
-    Ptr<WifiNetDevice> stNetDev3 = DynamicCast<WifiNetDevice>(wifistaDevice[2].Get(0));
-    Ptr<StaWifiMac> staMac2 = DynamicCast<StaWifiMac>(stNetDev3->GetMac());
+        // Get pointer to the measurement station mac object for client
+        Ptr<WifiNetDevice> staNetDevScan = DynamicCast<WifiNetDevice>(staNetDev[2*sta_i + 1].Get(0));
+        Ptr<RriModuleMac> rriMac = DynamicCast<RriModuleMac>(staNetDevScan->GetMac());
 
-    // Get pointer to the measurement station mac object for client 2
-    Ptr<WifiNetDevice> stNetDev4 = DynamicCast<WifiNetDevice>(wifistaDevice[3].Get(0));
-    Ptr<RriModuleMac> rriMod2 = DynamicCast<RriModuleMac>(stNetDev4->GetMac());
+        Simulator::Schedule(Seconds(reassocPeriod - delta), &rriModStaSnrData, rriMac); // measure snr before reassoc attempt
+        Simulator::Schedule(Seconds(reassocPeriod), &AssociateWithBestSNR, staMacMain, rriMac); // reassociate
+        Simulator::Schedule(Seconds(reassocPeriod + delta), &rriModStaSnrData, rriMac); // measure snr after reassoc attempt
+    };
 
-    // Display the measurement
-    Simulator::Schedule(Seconds(5.0), &displayStnSnr, rriMod2);
-    // Associate with AP with best Snr
-    Simulator::Schedule(Seconds(5.1), &AssociateWithBestSNR, staMac2, rriMod2);
-    Simulator::Schedule(Seconds(5.2), &displayStnSnr, rriMod2);
-
-    /******* end Client 2 *******************/
-
-
-
+    scheduleClients(0, 5.0, 0.1);
+    scheduleClients(1, 5.2, 0.1);
 
     Simulator::Stop(Seconds(20.0));
 
-    // This is to use the assoc trace source
+    // Enable tracing for assoc / deassoc
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/$ns3::StaWifiMac/Assoc",
                     MakeCallback(&TraceAssoc));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/$ns3::StaWifiMac/DeAssoc",
                     MakeCallback(&TraceDeassoc));
 
+    // Start the simulation
     Simulator::Run();
 
     // Calculating throughput on each client
-    double thrpt;
+    auto printClientThroughput = [](ApplicationContainer sink, int client_name) {
+        cout << "----- Client " << client_name << " -----" << endl;
+        double totalPacketsThrough = DynamicCast<PacketSink>(sink.Get(0))->GetTotalRx();
+        cout << "Total Packets received = " << totalPacketsThrough << endl;
+        double thrpt = totalPacketsThrough * 8 / (2 * 1000.0);
+        cout << "Thrpt Kbps =  " << thrpt << endl;
+    };
+    printClientThroughput(sink1, 1);
+    printClientThroughput(sink2, 2);
+    cout << "-------------------" << endl;
 
-    uint32_t totalPacketsThrough = DynamicCast<PacketSink>(sink1.Get(0))->GetTotalRx();
-    std::cout << "Total Packets received on client 1 = " << totalPacketsThrough << endl;
-    thrpt = totalPacketsThrough * 8 / (2 * 1000.0);
-    std::cout << " Thrpt of client 1  "
-              << " Kbps =  " << thrpt << endl;
-
-    totalPacketsThrough = DynamicCast<PacketSink>(sink2.Get(0))->GetTotalRx();
-    std::cout << "Total Packets received on client 2 = " << totalPacketsThrough << endl;
-    thrpt = totalPacketsThrough * 8 / (2 * 1000.0);
-    std::cout << " Thrpt of client 2  "
-              << " Kbps =  " << thrpt << endl;
 
     Simulator::Destroy();
     NS_LOG_INFO("Done.");

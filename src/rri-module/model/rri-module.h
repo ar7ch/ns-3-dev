@@ -34,6 +34,7 @@ public:
 
   RriModuleMac ();
   ~RriModuleMac () override;
+  std::string cpeId = "AP";
 
   /*
    * Below functions are pure virtual functions defined in ns3::WifiMac. Hence this class has to implement those functions
@@ -78,7 +79,7 @@ public:
    void ScheduleEvent(bool enable);
 
    // For UA
-   std::map <Mac48Address, std::pair<double,Ssid>> mapapSnrSsid;//Added Code -UA- Map to store average snr values from each AP and SSid
+   std::map <Mac48Address, std::pair<double,Ssid>> map_ApSnrSsid;//Added Code -UA- Map to store average snr values from each AP and SSid
    std::map <Mac48Address,std::list<double> > snrlist;//Added Code -UA- Map to store SNR values of last 5 beacons for each AP
 
 

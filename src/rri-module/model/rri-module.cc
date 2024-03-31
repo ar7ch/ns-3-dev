@@ -232,7 +232,7 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
                 map_ap_channel[from] = GetWifiPhy()->GetChannelNumber();
             }
             else {
-                cout << "RriModule: heard new AP with MAC: " << from << " Channel: " << (unsigned int) GetWifiPhy()->GetChannelNumber() << endl;
+                // cout << "RriModule: heard new AP with MAC: " << from << " Channel: " << (unsigned int) GetWifiPhy()->GetChannelNumber() << endl;
                 map_ap_channel[from] = GetWifiPhy()->GetChannelNumber();
             }
 
@@ -282,16 +282,16 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
         auto beaconSsidValue = beacon.Get<Ssid>();
         assert(beaconSsidValue.has_value());
         Ssid apSsid = beaconSsidValue.value();
-        if (mapapSnrSsid.count(temp_address))
+        if (map_ApSnrSsid.count(temp_address))
         {
-            mapapSnrSsid.erase(mapapSnrSsid.find(temp_address));
-            mapapSnrSsid[temp_address].first = snr_average;
-            mapapSnrSsid[temp_address].second = apSsid;
+            map_ApSnrSsid.erase(map_ApSnrSsid.find(temp_address));
+            map_ApSnrSsid[temp_address].first = snr_average;
+            map_ApSnrSsid[temp_address].second = apSsid;
         }
         else
         {
-            mapapSnrSsid[temp_address].first = snr_average;
-            mapapSnrSsid[temp_address].second = apSsid;
+            map_ApSnrSsid[temp_address].first = snr_average;
+            map_ApSnrSsid[temp_address].second = apSsid;
         }
         /// Till here
 
