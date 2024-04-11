@@ -85,7 +85,6 @@ using namespace ns3;
 using namespace std;
 
 
-const WifiStandard USED_80211_STANDARD = WIFI_STANDARD_80211ac;
 
 
 NS_LOG_COMPONENT_DEFINE("twoRadio");
@@ -288,6 +287,7 @@ main(int argc, char* argv[])
 {
     LogComponentEnable("twoRadio", LOG_LEVEL_INFO);
     LogComponentEnable("RriModuleMac", LOG_LEVEL_INFO);
+    LogComponentEnable("WifiPhy", LOG_LEVEL_DEBUG);
 
     double start_scanning = 2.0;
     double scan_duration = 1.0;
@@ -296,8 +296,7 @@ main(int argc, char* argv[])
     cmd.AddValue("StartRRM", "Start Time of RRI Module (in seconds)", start_scanning);
     cmd.AddValue("ScanDuration", "Duration to stay in channel (in seconds)", scan_duration);
     cmd.Parse(argc, argv);
-
-    int rrm_channels_to_scan[] = {36, 40, 44, 48, 52, 56};
+    vector<chNum_t> rrm_channels_to_scan{36, 40, 44, 48};
     // double snrThreshold = 60;
 
     const double txgain = 0.0;
@@ -344,28 +343,27 @@ main(int argc, char* argv[])
                                "Exponent",
                                DoubleValue(PathLossExponent));
 
-    YansWifiPhyHelper wiPhy = YansWifiPhyHelper();
-    wiPhy.Set("TxGain", DoubleValue(txgain));
-    wiPhy.Set("RxGain", DoubleValue(0));
-    wiPhy.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
-    wiPhy.Set("CcaEdThreshold", DoubleValue(CCAThreshold));
+    YansWifiPhyHelper wiPhyHelper = YansWifiPhyHelper();
+    wiPhyHelper.Set("TxGain", DoubleValue(txgain));
+    wiPhyHelper.Set("RxGain", DoubleValue(0));
+    wiPhyHelper.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
+    wiPhyHelper.Set("CcaEdThreshold", DoubleValue(CCAThreshold));
     // phy.Set("ShortGuardEnabled", BooleanValue(true)); // deprecated
 
     // configure operating channel
-    wiPhy.SetChannel(channel.Create());
+    wiPhyHelper.SetChannel(channel.Create());
     TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
     value.Set(WifiPhy::ChannelTuple {36, 20, WIFI_PHY_BAND_5GHZ, 0});
-    wiPhy.Set("ChannelSettings", value);
+    wiPhyHelper.Set("ChannelSettings", value);
 
     // Set Wifi Standard
-    WifiHelper wifi;
-    wifi.SetStandard(USED_80211_STANDARD);
+    WifiHelper wifiHelper;
+    wifiHelper.SetStandard(WIFI_STANDARD_80211ac);
 
-    StringValue phyRate;
-    phyRate = StringValue("VhtMcs0");
+    StringValue phyRate("VhtMcs0");
 
     // use same transmission rate for all the stations
-    wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+    wifiHelper.SetRemoteStationManager("ns3::ConstantRateWifiManager",
                                  "DataMode",
                                  StringValue(phyRate),
                                  "ControlMode",
@@ -405,8 +403,8 @@ main(int argc, char* argv[])
     /* Setting Attributes for AP */
     NS_LOG_INFO("Setup APs.");
     NetDeviceContainer apNetDevices[AP_NETDEVS_COUNT];
-    wiPhy.Set("TxPowerStart", DoubleValue(23.0));
-    wiPhy.Set("TxPowerEnd", DoubleValue(23.0));
+    wiPhyHelper.Set("TxPowerStart", DoubleValue(23.0));
+    wiPhyHelper.Set("TxPowerEnd", DoubleValue(23.0));
 
     auto setupAp = [&](int ap_i, Ssid ssid, unsigned long beaconInterval=102400) {
         wifiMac.SetType("ns3::ApWifiMac",
@@ -417,20 +415,20 @@ main(int argc, char* argv[])
                         "BeaconInterval",
                         TimeValue(MicroSeconds(beaconInterval)),
                         "QosSupported",
-                        BooleanValue(true));
-        apNetDevices[2*ap_i] = wifi.Install(wiPhy, wifiMac, wifiAPnodes.Get(ap_i));
+                        BooleanValue(true)
+                        );
+        apNetDevices[2*ap_i] = wifiHelper.Install(wiPhyHelper, wifiMac, wifiAPnodes.Get(ap_i));
         Ptr<WifiNetDevice> ap_i_NetDev = DynamicCast<WifiNetDevice>(apNetDevices[2*ap_i].Get(0));
         Ptr<RegularWifiMac> apMac = DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(ap_i_NetDev->GetMac()));
         apMac->SetSsid(ssid);
     };
 
-    // auto setupApChannel = [&](int ap_i, chNum_t ch) {
-    //     Ptr<WifiNetDevice> ap_i_NetDev = DynamicCast<WifiNetDevice>(apNetDevices[2*ap_i].Get(0));
-    //     Ptr<RegularWifiMac> apMac = DynamicCast<RegularWifiMac>(DynamicCast<ApWifiMac>(ap_i_NetDev->GetMac()));
-    //     setChannel(apMac, ch);
-    // };
-
     auto setupApScanMac = [&](int ap_i) {
+        wiPhyHelper.SetChannel(channel.Create());
+        TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
+        uint8_t chan = 36; // rrm_channels_to_scan[ap_i];
+        value.Set(WifiPhy::ChannelTuple {chan, 20, WIFI_PHY_BAND_5GHZ, 0});
+        wiPhyHelper.Set("ChannelSettings", value);
         scanMac.SetType("ns3::RriModuleMac",
                         "GetLoadUpdates",
                         BooleanValue(false),
@@ -439,22 +437,18 @@ main(int argc, char* argv[])
                         "ScanDuration",
                         TimeValue(Seconds(scan_duration)));
         // Install the Measurement MAC on STA Node
-        apNetDevices[2*ap_i + 1] = wifi.Install(wiPhy, scanMac, wifiAPnodes.Get(ap_i));
-        Ptr<WifiNetDevice> wifiNet = DynamicCast<WifiNetDevice>(apNetDevices[2*ap_i + 1].Get(0));
+        apNetDevices[2*ap_i + 1] = wifiHelper.Install(wiPhyHelper, scanMac, wifiAPnodes.Get(ap_i));
+        Ptr<WifiNetDevice> wifiNetDev = DynamicCast<WifiNetDevice>(apNetDevices[2*ap_i + 1].Get(0));
         // Set the netdev of the measurement mac to promisc mode to receive data packets meant to device 1
-        wifiNet->GetMac()->SetPromisc();
+        // wifiNetDev->SetStandard(WIFI_STANDARD_80211ac);
+        wifiNetDev->GetMac()->SetPromisc();
         // Pass to the scanning module the list of channels to scan
-        Ptr<RriModuleMac> rriMod = DynamicCast<RriModuleMac>(wifiNet->GetMac());
-        rriMod->setChanneltoScan(rrm_channels_to_scan);
+        Ptr<RriModuleMac> rriMod = DynamicCast<RriModuleMac>(wifiNetDev->GetMac());
+        rriMod->setChannelsToScan(rrm_channels_to_scan);
         rriMod->cpeId = "AP " + std::to_string(ap_i);
-        wiPhy.SetChannel(channel.Create());
-        TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
-        value.Set(WifiPhy::ChannelTuple {36, 20, WIFI_PHY_BAND_5GHZ, 0});
-        wiPhy.Set("ChannelSettings", value);
     };
 
     // all start on same channel
-    // const int apStartingChannels[] = {36, 36, 36, 36};
 
     for (int i = 0; i < AP_COUNT; i++) {
         setupAp(i, ssids[i]);
@@ -509,20 +503,6 @@ main(int argc, char* argv[])
     NS_LOG_INFO("Assign IP Addresses.");
 
     Ipv4AddressHelper address;
-
-    // ipaddress for p2p interfaces
-    // address.SetBase("10.1.1.0", "255.255.255.0");
-    // Ipv4InterfaceContainer p2pInterfaces1;
-    // p2pInterfaces1 = address.Assign(p2pDevices1);
-    //
-    // address.SetBase("10.1.2.0", "255.255.255.0");
-    // Ipv4InterfaceContainer p2pInterfaces2 = address.Assign(p2pDevices2);
-    //
-    // address.SetBase("10.1.3.0", "255.255.255.0");
-    // Ipv4InterfaceContainer p2pInterfaces3 = address.Assign(p2pDevices3);
-    //
-    // address.SetBase("10.1.4.0", "255.255.255.0");
-    // Ipv4InterfaceContainer p2pInterfaces4 = address.Assign(p2pDevices4);
 
     // Assign IP address to the 2 interfaces on station nodes
     address.SetBase("10.1.5.0", "255.255.255.0");
@@ -591,7 +571,7 @@ main(int argc, char* argv[])
     Ptr<OutputStreamWrapper> stream = ascii.CreateFileStream(scriptName + "tr");
     // stack.EnableAsciiIpv4All(stream);
 
-    wiPhy.EnablePcapAll(scriptName);
+    wiPhyHelper.EnablePcapAll(scriptName);
 
     NS_LOG_INFO("Setup animation.");
     auto setupAPAnimation = [&](int i) {

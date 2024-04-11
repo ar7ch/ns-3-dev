@@ -14,6 +14,7 @@
 #include "ns3/event-id.h"
 #include "ns3/packet.h"
 #include "ns3/capability-information.h"
+#include "ns3/wifi-phy.h"
 
 using RegularWifiMac = ns3::WifiMac;
 using chNum_t = uint8_t;
@@ -28,16 +29,20 @@ namespace ns3  {
  *
  * The Wifi MAC high model for a non-AP STA in a BSS.
  */
+using chNum_t = uint8_t;
+using chWidth_t = uint16_t;
+using primary20idx_t = uint16_t;
 
 // Kalp Modified
-class RriModuleMac : public RegularWifiMac
+class RriModuleMac : public WifiMac
 {
 public:
-  static TypeId GetTypeId (void);
-
+  std::string cpeId = "AP";
+  static TypeId GetTypeId ();
   RriModuleMac ();
   ~RriModuleMac () override;
-  std::string cpeId = "AP";
+
+  void setChannelsToScan(std::vector<chNum_t> &channels);
 
   /*
    * Below functions are pure virtual functions defined in ns3::WifiMac. Hence this class has to implement those functions
@@ -78,13 +83,11 @@ public:
 
   /// Added by Kalpa
    void Scan(); // Added Code -Scanning- Function to make client scan channels
-   void setChanneltoScan(const int *chnlNos);
    void ScheduleEvent(bool enable);
 
    // For UA
    std::map <Mac48Address, std::pair<double,Ssid>> map_ApSnrSsid;//Added Code -UA- Map to store average snr values from each AP and SSid
-   std::map <Mac48Address,std::list<double> > snrlist;//Added Code -UA- Map to store SNR values of last 5 beacons for each AP
-
+   std::map <Mac48Address,std::list<double>> snrlist;//Added Code -UA- Map to store SNR values of last 5 beacons for each AP
 
    // For AP Scanning
    void UpdateChannelLoad();
@@ -100,11 +103,11 @@ public:
   std::map <Mac48Address, double> mac_rssi; // For TPC
 
                                             ///Upto here
-
-
 private:
-   //virtual void Receive (Ptr<Packet> packet, const WifiMacHeader *hdr);
    void Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId) override;
+   void scanChannel(std::vector<chNum_t>::iterator chan_it);
+   void setOperatingChannel(int newOperatingChannel);
+   Ptr<WifiPhy> GetWifiPhy() const;
 
   /// Added by Kalpa
   EventId ScanEvent;//Added Code-scanning- Channel scanning
@@ -113,17 +116,29 @@ private:
   Time m_startscan;//Added code - Attribute for  Triggering the scan function at specific time
   Time m_scanduration;//Added Code - Attribute for duration for scanning each channel
   int choice; //Added Code-Scanning - To choose the  channels to scan
-  const int  *channelsToScan; // Added Code - To get the channel number from the array
+  std::vector<chNum_t> channelsToScan; // Added Code - To get the channel number from the array
   /// Till here
 
    ///Added by KRISHNA
-  Mac48Address ap_address, client_address;
-  int channel, load;
+  Mac48Address ap_address;
+  Mac48Address client_address;
+  int channel;
+  int load;
   EventId ShowLoadTable;
   bool Update;
-///Upto Here
-
-
+  bool scanInProgress = false;
+  chNum_t operatingChannel;
+  std::map<chNum_t, WifiPhy::ChannelTuple> map_chNum_chanTuple {
+      {36, std::make_tuple(36, 20, WIFI_PHY_BAND_5GHZ, 0)},
+          {40, std::make_tuple(40, 20, WIFI_PHY_BAND_5GHZ, 0)},
+          {44, std::make_tuple(44, 20, WIFI_PHY_BAND_5GHZ, 0)},
+          {48, std::make_tuple(48, 20, WIFI_PHY_BAND_5GHZ, 0)},
+          {52, std::make_tuple(52, 20, WIFI_PHY_BAND_5GHZ, 0)},
+          {56, std::make_tuple(56, 20, WIFI_PHY_BAND_5GHZ, 0)},
+          {60, std::make_tuple(60, 20, WIFI_PHY_BAND_5GHZ, 0)},
+          {64, std::make_tuple(64, 20, WIFI_PHY_BAND_5GHZ, 0)},
+  };
+  std::vector<chNum_t> availChannels;
 };
 
 } //namespace ns3
