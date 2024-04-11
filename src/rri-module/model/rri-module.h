@@ -16,6 +16,9 @@
 #include "ns3/capability-information.h"
 
 using RegularWifiMac = ns3::WifiMac;
+using chNum_t = uint8_t;
+using chWidth_t = uint16_t;
+using primary20idx_t = uint16_t;
 
 namespace ns3  {
 
@@ -75,7 +78,7 @@ public:
 
   /// Added by Kalpa
    void Scan(); // Added Code -Scanning- Function to make client scan channels
-   void setChanneltoScan(int *chnlNos);
+   void setChanneltoScan(const int *chnlNos);
    void ScheduleEvent(bool enable);
 
    // For UA
@@ -86,7 +89,7 @@ public:
    // For AP Scanning
    void UpdateChannelLoad();
    std::map <Mac48Address,int> map_ap_channel; //Added Code -Channel Selection- Map to store the channel number of each AP
-   std::map <int,int> mapchnload; //Added Code -Channel Selection- Map to store number of APs in each channel
+   std::map <int,int> map_ChanLoad; //Added Code -Channel Selection- Map to store number of APs in each channel
   /// Till here
 
   ///Added by KRISHNA
@@ -94,8 +97,9 @@ public:
   std::map <Mac48Address, std::pair <int, int>> ap_channel_load;
   void UpdateLoad ();
 
-   std::map <Mac48Address, double> mac_rssi; // For TPC
-   ///Upto here
+  std::map <Mac48Address, double> mac_rssi; // For TPC
+
+                                            ///Upto here
 
 
 private:
@@ -109,7 +113,7 @@ private:
   Time m_startscan;//Added code - Attribute for  Triggering the scan function at specific time
   Time m_scanduration;//Added Code - Attribute for duration for scanning each channel
   int choice; //Added Code-Scanning - To choose the  channels to scan
-  int  *channelsToScan; // Added Code - To get the channel number from the array
+  const int  *channelsToScan; // Added Code - To get the channel number from the array
   /// Till here
 
    ///Added by KRISHNA

@@ -23,8 +23,6 @@
 #include <cassert>
 
 
-using std::endl;
-using std::cout;
 
 namespace ns3
 {
@@ -115,15 +113,15 @@ RriModuleMac::ScheduleEvent(bool enable)
     // std::cout<<"Scan Time entered is: "<<m_scanduration<<std::endl;
 
     // For scanning the different channels
-    ScanEvent = Simulator::Schedule(m_startscan, &RriModuleMac::Scan, this);
+    // ScanEvent = Simulator::Schedule(Time("4s"), &RriModuleMac::Scan, this);
 
     // To update the channel load information
-    UpdtChnlApLoadEvent = Simulator::Schedule(Time("2s"), &RriModuleMac::UpdateChannelLoad, this);
+    // UpdtChnlApLoadEvent = Simulator::Schedule(Time("2s"), &RriModuleMac::UpdateChannelLoad, this);
     /// Till here
 
     /// Added by KRISHNA
     // To update the load information on the AP into the datastructure
-    ShowLoadTable = Simulator::Schedule(Seconds(8), &RriModuleMac::UpdateLoad, this);
+    // ShowLoadTable = Simulator::Schedule(Seconds(8), &RriModuleMac::UpdateLoad, this);
     /// Upto Here
 }
 
@@ -146,7 +144,7 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
     // To retrieve the snr tag. Header files tag.h and snr-tag.h also added
     if (packet->PeekPacketTag(tag))
     {
-        NS_LOG_DEBUG("Received Packet with SNR = " << tag.Get());
+        NS_LOG_INFO(cpeId << " at " << Simulator::Now().GetSeconds() <<": Received Packet with SNR = " << tag.Get());
         snrValue = tag.Get();
         SNRValueindB = (10 * log10(snrValue));
     }
@@ -154,7 +152,7 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
 
     if (hdr.GetAddr3() == GetAddress())
     {
-        NS_LOG_LOGIC("packet sent by us.");
+        NS_LOG_INFO("packet sent by us.");
         return;
     }
 
@@ -325,7 +323,6 @@ void
 RriModuleMac::Scan()
 {
     Time t = Simulator::Now();
-    // std::cout<<"\nAt "<<t<<"	Scanning Channel ";
 
     // Currenly 3 channles are scanned. So after 3 channels are scanned, return to the first channel
     choice = choice % 3;
@@ -339,18 +336,20 @@ RriModuleMac::Scan()
     constexpr WifiPhyBand band = WIFI_PHY_BAND_5GHZ;
     constexpr WifiStandard standard = WIFI_STANDARD_80211ac;
     channel.Set(ch, chan_freq, width, standard, band);
+    std::cout << std::endl << cpeId << " at " << t.GetSeconds()  <<"s: Scanning Channel " << ch;
     // if ((uint16_t) GetWifiPhy()->GetChannelNumber() != ch) {
     //     cout << "RRI module (" << GetBssid(0) << "): scanning channel " << ch << endl;
     // }
-    GetWifiPhy()->SetOperatingChannel(channel);
+    GetWifiPhy(0)->SetOperatingChannel(channel);
 
     // ScanEvent = Simulator::Schedule (Seconds(5), &StaWifiMacMsr::Scan,this);
-    ScanEvent = Simulator::Schedule(m_scanduration, &RriModuleMac::Scan, this);
+    // m_scanduration = Seconds(0.3);
+    ScanEvent = Simulator::Schedule(Seconds(5), &RriModuleMac::Scan, this);
 }
 
 // Added code -Scanning- to get the list of channels to scan
 void
-RriModuleMac::setChanneltoScan(int* chnlNos)
+RriModuleMac::setChanneltoScan(const int* chnlNos)
 {
     // for (int i=0; i < size; i++)
     channelsToScan = chnlNos;
@@ -368,22 +367,22 @@ RriModuleMac::UpdateChannelLoad()
     std::map<Mac48Address, int>::iterator it;
     int cnt = 0;
 
-    mapchnload.clear();
+    map_ChanLoad.clear();
 
     // mapchnload is updated with the help of mapAPchn by counting the number of APs in a channel
     for (it = map_ap_channel.begin(); it != map_ap_channel.end(); ++it)
     {
         // std::cout<<"\n"<<it->first<<" "<<it->second;
-        if (mapchnload.count(it->second))
+        if (map_ChanLoad.count(it->second))
         {
-            cnt = mapchnload[it->second];
-            mapchnload.erase(mapchnload.find(it->second));
+            cnt = map_ChanLoad[it->second];
+            map_ChanLoad.erase(map_ChanLoad.find(it->second));
             cnt = cnt + 1;
-            mapchnload[it->second] = cnt;
+            map_ChanLoad[it->second] = cnt;
         }
         else
         {
-            mapchnload[it->second] = 1;
+            map_ChanLoad[it->second] = 1;
         }
     }
 
@@ -424,7 +423,7 @@ RriModuleMac::UpdateLoad()
         std::cout << "-----------------------------------------------------" << std::endl;
         for (it3 = ap_channel_load.begin(); it3 != ap_channel_load.end(); it3++) {
             std::cout << it3->second.first << "\t\t" << it3->first << "\t\t" << it3->second.second
-                      << endl;
+                      << std::endl;
         }
         std::cout << "*****************************************************" << std::endl;
         std::cout << "*********************CLIENT AP***********************" << std::endl;
