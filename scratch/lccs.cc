@@ -77,6 +77,7 @@
 
 #include <iostream>
 #include <map>
+#include <iomanip>
 // #include <random>
 // #include <iterator>
 
@@ -104,46 +105,46 @@ NS_LOG_COMPONENT_DEFINE("twoRadio");
 // Function to display the map containing average SNR values of last 5 beacons.
 // We display both MAC of Aps and the average snr values.
 // Also display the Aps and the channel number of the Aps
-// void
-// rriModStaSnrData(Ptr<RriModuleMac> rriMod)
-// {
-//     int chNo;
-//     Ssid apSsid;
-//     char* ssidVal;
-//
-//     cout << endl;
-//
-//     std::map<Mac48Address, std::pair<double, Ssid>> map_ApSnrSsid = rriMod->map_ApSnrSsid;
-//
-//     /* Test in APChnl Map */
-//     std::map<Mac48Address, int> map_ap_channel = rriMod->map_ap_channel;
-//
-//     // cout << "AP Mac Address   \tChannel #" << endl;
-//     // cout << "-------------------------------------------------------------" << endl;
-//     // for (auto it = map_ap_channel.begin(); it != map_ap_channel.end(); ++it)
-//     // {
-//     //     cout << setw(20) << it->first << setw(10) << it->second << "\n";
-//     // }
-//
-//     cout << endl;
-//     cout << "Scan results for " << rriMod->cpeId << " (" << rriMod->GetAddress() << ")" << endl;
-//     cout << "Entries: " << map_ApSnrSsid.size() << endl;
-//     cout << "BSSID   \t   Avg SNR \t Channel# \t  SSID" << endl;
-//     cout << "------------------------------------------------ --------" << endl;
-//     for (auto it = map_ApSnrSsid.begin(); it != map_ApSnrSsid.end(); ++it)
-//     {
-//         chNo = map_ap_channel[it->first];
-//
-//         apSsid = it->second.second;
-//         ssidVal = apSsid.PeekString();
-//
-//         /* Output first , macid , snr value , channel no, ssid */
-//         cout << setw(15) << it->first << setw(10) << it->second.first << " \t " << chNo
-//              << "\t\t" << ssidVal << "\n";
-//     }
-//
-//     cout << endl; /* Print a new line */
-// }
+void
+rriModStaSnrData(Ptr<RriModuleMac> rriMod)
+{
+    int chNo;
+    Ssid apSsid;
+    char* ssidVal;
+
+    cout << endl;
+
+    std::map<Mac48Address, std::pair<double, Ssid>> map_ApSnrSsid = rriMod->map_ApSnrSsid;
+
+    /* Test in APChnl Map */
+    std::map<Mac48Address, int> map_ap_channel = rriMod->map_ap_channel;
+
+    // cout << "AP Mac Address   \tChannel #" << endl;
+    // cout << "-------------------------------------------------------------" << endl;
+    // for (auto it = map_ap_channel.begin(); it != map_ap_channel.end(); ++it)
+    // {
+    //     cout << setw(20) << it->first << setw(10) << it->second << "\n";
+    // }
+
+    cout << endl;
+    cout << "Scan results for " << rriMod->cpeId << " (" << rriMod->GetAddress() << ")" << endl;
+    cout << "Entries: " << map_ApSnrSsid.size() << endl;
+    cout << "BSSID   \t   Avg SNR \t Channel# \t  SSID" << endl;
+    cout << "------------------------------------------------ --------" << endl;
+    for (auto it = map_ApSnrSsid.begin(); it != map_ApSnrSsid.end(); ++it)
+    {
+        chNo = map_ap_channel[it->first];
+
+        apSsid = it->second.second;
+        ssidVal = apSsid.PeekString();
+
+        /* Output first , macid , snr value , channel no, ssid */
+        cout << setw(15) << it->first << setw(10) << it->second.first << " \t " << chNo
+             << "\t\t" << ssidVal << "\n";
+    }
+
+    cout << endl; /* Print a new line */
+}
 //
 // // Function to Associate with the AP with best snr value
 // void
@@ -152,7 +153,6 @@ NS_LOG_COMPONENT_DEFINE("twoRadio");
 //     // std::cout << "\n";
 //     // std::cout << "*************************** ";
 //     // std::cout << "\n";
-//
 //     // Get access to the mapapSnrSsid data structure of the client from the new mac
 //     std::map<Mac48Address, std::pair<double, Ssid>> map_Ap_SnrSsid = rriMod->map_ApSnrSsid;
 //     std::map<Mac48Address, int> mapAPchn = rriMod->map_ap_channel;
@@ -287,6 +287,7 @@ int
 main(int argc, char* argv[])
 {
     LogComponentEnable("twoRadio", LOG_LEVEL_INFO);
+    LogComponentEnable("RriModuleMac", LOG_LEVEL_INFO);
 
     double start_scanning = 2.0;
     double scan_duration = 1.0;
@@ -679,7 +680,12 @@ main(int argc, char* argv[])
 
     // Start the simulation
     NS_LOG_INFO("Starting simulation.");
+    // Get pointer to the original station mac object for client
+    // Get pointer to the measurement station mac object for client
+    Ptr<WifiNetDevice> apNetDevScan = DynamicCast<WifiNetDevice>(apNetDevices[1].Get(0));
+    Ptr<RriModuleMac> rriMac = DynamicCast<RriModuleMac>(apNetDevScan->GetMac());
     Simulator::Run();
+    rriModStaSnrData(rriMac);
 
     // // Calculating throughput on each client
     // auto printClientThroughput = [](ApplicationContainer sink, int client_name) {
