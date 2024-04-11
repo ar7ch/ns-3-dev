@@ -21,8 +21,9 @@
 #include "ns3/mgt-headers.h"
 #include "ns3/wifi-mpdu.h"
 #include <cassert>
+#include <sstream>
 
-
+using std::cout, std::endl;
 
 namespace ns3
 {
@@ -92,15 +93,14 @@ RriModuleMac::GetTypeId()
     return tid;
 }
 
-RriModuleMac::RriModuleMac()
-    : choice(0) // Kalpa - To choose the channel to scan
-
-{
+RriModuleMac::RriModuleMac() {
+    for (auto it : map_chNum_chanTuple){
+        availChannels.push_back(it.first);
+    }
     NS_LOG_FUNCTION(this);
 }
 
-RriModuleMac::~RriModuleMac()
-{
+RriModuleMac::~RriModuleMac() {
     NS_LOG_FUNCTION(this);
 }
 
@@ -127,6 +127,7 @@ RriModuleMac::ScheduleEvent(bool enable)
 
 void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
 {
+    assert (linkId == 0);
     NS_LOG_FUNCTION(this << mpdu);
     const WifiMacHeader& hdr = mpdu->GetHeader();
     NS_ASSERT(!mpdu->GetHeader().IsCtl());
@@ -144,7 +145,7 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
     // To retrieve the snr tag. Header files tag.h and snr-tag.h also added
     if (packet->PeekPacketTag(tag))
     {
-        NS_LOG_INFO(cpeId << " at " << Simulator::Now().GetSeconds() <<": Received Packet with SNR = " << tag.Get());
+        // NS_LOG_INFO(cpeId << " at " << Simulator::Now().GetSeconds() <<": Received Packet with SNR = " << tag.Get());
         snrValue = tag.Get();
         SNRValueindB = (10 * log10(snrValue));
     }
@@ -155,15 +156,6 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
         NS_LOG_INFO("packet sent by us.");
         return;
     }
-
-    /// Commented by KRISHNA: To make the Measruremnt MAC receive data sent to any other MAc
-    /** else if (hdr->GetAddr1 () != GetAddress ()
-              && !hdr->GetAddr1 ().IsGroup ())
-       {
-         NS_LOG_LOGIC ("packet is not for us");
-         std::cout<<"Dropping packets  hdr->GetAddr1 () "<< "\t "<<hdr->GetAddr1() <<"
-       hdr->GetAddr2" << "\t" << hdr->GetAddr2 ()<< "\n"; NotifyRxDrop (packet); return;
-       }*/
 
     else if (hdr.IsData())
     {
@@ -224,13 +216,13 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
         Mac48Address from = hdr.GetAddr2();
         if (from != GetAddress()) // If a beacon is from another AP
         {
+            cout << cpeId << " heard AP with MAC: " << from << " Channel: " << (unsigned int) GetWifiPhy()->GetChannelNumber() << endl;
             if (map_ap_channel.count(from))
             {
                 map_ap_channel.erase(map_ap_channel.find(from));
                 map_ap_channel[from] = GetWifiPhy()->GetChannelNumber();
             }
             else {
-                // cout << "RriModule: heard new AP with MAC: " << from << " Channel: " << (unsigned int) GetWifiPhy()->GetChannelNumber() << endl;
                 map_ap_channel[from] = GetWifiPhy()->GetChannelNumber();
             }
 
@@ -322,39 +314,59 @@ void RriModuleMac::Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
 void
 RriModuleMac::Scan()
 {
-    Time t = Simulator::Now();
+    constexpr double scanPeriodSec = 3.0;
+    if (scanInProgress || !GetWifiPhy()->IsStateIdle())
+    {
+        NS_LOG_INFO(cpeId << " at " << Simulator::Now().GetSeconds() << ": Scan already in progress or PHY not idle, new scan postponed for 0.1s");
+        Simulator::Schedule(Seconds(0.1), &RriModuleMac::Scan, this);
+        return;
+    }
+    Simulator::ScheduleNow(&RriModuleMac::scanChannel, this, channelsToScan.begin());
+    Simulator::Schedule(Seconds(scanPeriodSec), &RriModuleMac::Scan, this);
+}
 
-    // Currenly 3 channles are scanned. So after 3 channels are scanned, return to the first channel
-    choice = choice % 3;
+void RriModuleMac::setOperatingChannel(int newOperatingChannel)
+{
+    if (map_chNum_chanTuple.count(newOperatingChannel) != 0)
+    {
+        operatingChannel = newOperatingChannel;
+    } else
+    {
+        NS_ABORT_MSG("Invalid channel number: " << newOperatingChannel);
+    }
+    std::stringstream ss;
+    GetWifiPhy()->ConfigureStandard(WIFI_STANDARD_80211ac);
+    ss << "{" << std::to_string(operatingChannel) << ", 20, BAND_5GHZ, 0}";
+    GetWifiPhy()->SetAttribute("ChannelSettings", StringValue(ss.str()));
+    assert(GetWifiPhy()->GetOperatingChannel().GetNumber() == operatingChannel);
+}
 
-    /* from artem: simply using channel number as integer is not possible anymore */
-    WifiPhyOperatingChannel channel;
-    const uint16_t ch = channelsToScan[choice];
-    choice++;
-    constexpr uint16_t chan_freq = 0;
-    constexpr uint16_t width = 20;
-    constexpr WifiPhyBand band = WIFI_PHY_BAND_5GHZ;
-    constexpr WifiStandard standard = WIFI_STANDARD_80211ac;
-    channel.Set(ch, chan_freq, width, standard, band);
-    std::cout << std::endl << cpeId << " at " << t.GetSeconds()  <<"s: Scanning Channel " << ch;
-    // if ((uint16_t) GetWifiPhy()->GetChannelNumber() != ch) {
-    //     cout << "RRI module (" << GetBssid(0) << "): scanning channel " << ch << endl;
-    // }
-    GetWifiPhy(0)->SetOperatingChannel(channel);
+void RriModuleMac::scanChannel(std::vector<chNum_t>::iterator channel_it)
+{
+    constexpr double scanDuration = 0.5;
+    if (!GetWifiPhy()->IsStateIdle())
+    {
+        NS_LOG_INFO(cpeId << " at " << Simulator::Now().GetSeconds() << ": PHY not idle, scan postponed for 0.1s");
+        Simulator::Schedule(Seconds(0.1), &RriModuleMac::scanChannel, this, channel_it);
+        return;
+    }
 
-    // ScanEvent = Simulator::Schedule (Seconds(5), &StaWifiMacMsr::Scan,this);
-    // m_scanduration = Seconds(0.3);
-    ScanEvent = Simulator::Schedule(Seconds(5), &RriModuleMac::Scan, this);
+    if (channel_it == channelsToScan.end()) { // actions when scan ends
+        NS_LOG_INFO("Scan completed. Returning to the first channel " << (uint32_t) availChannels.front());
+        setOperatingChannel(availChannels.front());
+        scanInProgress = false;
+        return;
+    }
+    NS_LOG_INFO(cpeId << " at " << (double) Simulator::Now().GetMicroSeconds() / 1e6
+            << "s: Scanning Channel " << (unsigned int) *channel_it);
+    setOperatingChannel(*channel_it);
+    channel_it++;
+    Simulator::Schedule(Seconds(scanDuration), &RriModuleMac::scanChannel, this, channel_it);
 }
 
 // Added code -Scanning- to get the list of channels to scan
-void
-RriModuleMac::setChanneltoScan(const int* chnlNos)
-{
-    // for (int i=0; i < size; i++)
-    channelsToScan = chnlNos;
-    // std::cout<< "From Setchannel " << chnl[0] << "\t"  << chnl[1] << "\t"  << chnl[2] << "\t" <<
-    // "\n";
+void RriModuleMac::setChannelsToScan(std::vector<chNum_t>& channels) {
+    channelsToScan = channels;
 }
 
 // Added code -To update the channel load information into mapchnload datastructure
@@ -436,6 +448,10 @@ RriModuleMac::UpdateLoad()
 
         ShowLoadTable = Simulator::Schedule(Seconds(5), &RriModuleMac::UpdateLoad, this);
     }
+}
+
+Ptr<WifiPhy> RriModuleMac::GetWifiPhy() const {
+    return WifiMac::GetWifiPhy(0);
 }
 
 /// Upto here
