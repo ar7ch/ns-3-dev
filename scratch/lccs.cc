@@ -15,6 +15,7 @@
 #include <iostream>
 #include <map>
 #include <iomanip>
+#include <cassert>
 // #include <random>
 // #include <iterator>
 
@@ -25,10 +26,25 @@ NS_LOG_COMPONENT_DEFINE("twoRadio");
 
 class ScanningStaWifiMac : public StaWifiMac {
     public:
+    vector<uint32_t> channelsToScan{36, 40, 44, 48};
+    vector<uint32_t> availChannels{36, 40, 44, 48};
+    map<uint32_t, uint32_t> channelLoads;
+    bool scanInProgress = false;
+    uint32_t operatingChannel = 36;
+
     void Scan() {
-        StartScanning();
+        if (scanInProgress || !GetWifiPhy(0)->IsStateIdle()) {
+            NS_LOG_INFO("Scan already in progress or PHY not idle, new scan postponed for 0.1s");
+            Simulator::Schedule(Seconds(0.1), &ScanningStaWifiMac::Scan, this);
+            return;
+        }
+        scanInProgress = true;
+        Simulator::ScheduleNow(&ScanningStaWifiMac::scanChannel, this, channelsToScan.begin());
+        Simulator::Schedule(Seconds(2), &ScanningStaWifiMac::Scan, this);
     }
+
     ScanningStaWifiMac() : StaWifiMac() {}
+
     static TypeId GetTypeId() {
         static TypeId tid =
             TypeId("ns3::ScanningStaWifiMac")
@@ -37,12 +53,46 @@ class ScanningStaWifiMac : public StaWifiMac {
             .AddConstructor<ScanningStaWifiMac>();
         return tid;
     }
+
+    void setOperatingChannel(int newOperatingChannel) {
+        if (std::find(availChannels.begin(), availChannels.end(), newOperatingChannel) == availChannels.end()) {
+            NS_ABORT_MSG(" at " << Simulator::Now().GetSeconds() << ": Channel " << newOperatingChannel << " is not available");
+            return;
+        }
+        operatingChannel = newOperatingChannel;
+        std::stringstream ss;
+        GetWifiPhy(0)->ConfigureStandard(WIFI_STANDARD_80211ac);
+        ss << "{" << std::to_string(newOperatingChannel) << ", 20, BAND_5GHZ, 0}";
+        GetWifiPhy(0)->SetAttribute("ChannelSettings", StringValue(ss.str()));
+        GetWifiPhy(0)->ConfigureStandard(WIFI_STANDARD_80211ac);
+        assert(GetWifiPhy(0)->GetOperatingChannel().GetNumber() == operatingChannel);
+    }
+
+
     private:
     void Receive(Ptr<const WifiMpdu> mpdu, uint8_t linkId) override {
         if (mpdu->GetHeader().IsBeacon()) {
-            cout << "AP received beacon from BSSID " << mpdu->GetHeader().GetAddr3() << " at channel " << std::to_string(GetWifiPhy(0)->GetOperatingChannel().GetNumber()) << endl;
+            cout << "AP received beacon from BSSID " << mpdu->GetHeader().GetAddr3()
+                << " at channel " << std::to_string(GetWifiPhy(0)->GetOperatingChannel().GetNumber()) << ", link=" << (uint32_t) linkId << endl;
         }
         WifiMac::Receive(mpdu, linkId);
+    }
+
+    void scanChannel(std::vector<uint32_t>::iterator channel_it)
+    {
+        constexpr double scanDuration = 0.3;
+
+        if (channel_it == channelsToScan.end()) { // actions when scan ends
+            NS_LOG_INFO("Scan completed. Returning to the first channel " << (uint32_t) channelsToScan.front());
+            setOperatingChannel(channelsToScan.front());
+            scanInProgress = false;
+            return;
+        }
+        NS_LOG_INFO(" at " << (double) Simulator::Now().GetMicroSeconds() / 1e6
+                << "s: Scanning Channel " << (unsigned int) *channel_it);
+        setOperatingChannel(*channel_it);
+        channel_it++;
+        Simulator::Schedule(Seconds(scanDuration), &ScanningStaWifiMac::scanChannel, this, channel_it);
     }
 };
 
@@ -183,62 +233,66 @@ map<chNum_t, WifiPhy::ChannelTuple> map_chanToChanTuple {
 
 list<chNum_t> avail_channels = {36, 40, 44, 48, 52, 56};
 
-
-void setChannel(Ptr<RegularWifiMac> apMac, chNum_t ch)
-{
-    uint8_t link_id = *apMac->GetLinkIds().begin();
-    auto& chanTuple = map_chanToChanTuple[ch];
-    apMac->GetWifiPhy(link_id)->SetOperatingChannel(chanTuple);
-}
-
 void traceRx(std::string ctx, Ptr<const Packet> p)
 {
     std::cout << "Rx: " << ctx << std::endl;
 }
 
 //void setChannelEvent(Ptr<RegularWifiMac> apMac, Ptr<RriModuleMac> rriMod, Ptr<Node> node, chNum_t ch, AnimationInterface& anim)
-void setChannelEvent(Ptr<RegularWifiMac> apMac, Ptr<RriModuleMac> rriMod, Ptr<Node> node, chNum_t ch)
+// void setChannelEvent(Ptr<RegularWifiMac> apMac, Ptr<RriModuleMac> rriMod, Ptr<Node> node, chNum_t ch)
+// {
+//     setChannel(apMac, ch);
+//     std::cout << rriMod->cpeId << " switched to channel " << +ch << endl;
+//     //anim.UpdateNodeDescription(node, rriMod->cpeId + "\nCH: " + std::to_string(ch));
+// }
+
+// void decideChanSwitch(Ptr<ApWifiMac> apMac, Ptr<RriModuleMac> rriMod, Ptr<Node> node)
+// {
+//     // Get access to the map_ApSnrSsid data structure of the AP
+//     // std::map<Mac48Address, std::pair<double, Ssid>>& map_Ap_SnrSsid = rriMod->map_ApSnrSsid;
+//     // std::map<Mac48Address, int>& mapAPchn = rriMod->map_ap_channel;
+//     chNum_t cur_ch = apMac->GetWifiPhy()->GetChannelNumber();
+//     chNum_t new_ch = cur_ch;
+//     using chanLoad_t = int;
+//     chanLoad_t min_load = rriMod->map_ChanLoad[cur_ch];
+//
+//     // using map_ChanLoad, print the table of channel loads
+//     // print header
+//     std::cout << rriMod->cpeId << " is deciding on channel switch. Current Channel: " << +cur_ch << endl;
+//     std::cout << "Channel\tLoad" << endl;
+//     std::cout << "-------------" << endl;
+//
+//     for (chNum_t ch_i : avail_channels) {
+//         std::cout << (unsigned int) ch_i << "\t" << rriMod->map_ChanLoad[ch_i] << endl;
+//         chanLoad_t load_i = 0;
+//         if (rriMod->map_ChanLoad.count(ch_i)) {
+//             load_i = rriMod->map_ChanLoad[ch_i];
+//         }
+//         if (load_i < min_load) {
+//             min_load = load_i;
+//             new_ch = ch_i;
+//         }
+//     }
+//     std::cout << "-------------" << endl;
+//
+//     if (new_ch != cur_ch) {
+//         // NS_LOG_INFO(rriMod->cpeId << ": setting channel to " << +new_ch << endl);
+//         setChannelEvent(apMac, rriMod, node, new_ch);
+//     } else {
+//         NS_LOG_INFO(rriMod->cpeId << " decided to stay on channel " << +cur_ch);
+//     }
+// }
+
+bool MonitoringModeRxCallback(
+                     Ptr<NetDevice> device,
+                     Ptr<const Packet> packet,
+                     uint16_t protocol,
+                     const Address& sender,
+                     const Address& receiver,
+                     WifiNetDevice::PacketType packetType)
 {
-    setChannel(apMac, ch);
-    std::cout << rriMod->cpeId << " switched to channel " << +ch << endl;
-    //anim.UpdateNodeDescription(node, rriMod->cpeId + "\nCH: " + std::to_string(ch));
-}
-
-void decideChanSwitch(Ptr<ApWifiMac> apMac, Ptr<RriModuleMac> rriMod, Ptr<Node> node)
-{
-    // Get access to the map_ApSnrSsid data structure of the AP
-    // std::map<Mac48Address, std::pair<double, Ssid>>& map_Ap_SnrSsid = rriMod->map_ApSnrSsid;
-    // std::map<Mac48Address, int>& mapAPchn = rriMod->map_ap_channel;
-    chNum_t cur_ch = apMac->GetWifiPhy()->GetChannelNumber();
-    chNum_t new_ch = cur_ch;
-    using chanLoad_t = int;
-    chanLoad_t min_load = rriMod->map_ChanLoad[cur_ch];
-
-    // using map_ChanLoad, print the table of channel loads
-    // print header
-    std::cout << rriMod->cpeId << " is deciding on channel switch. Current Channel: " << +cur_ch << endl;
-    std::cout << "Channel\tLoad" << endl;
-    std::cout << "-------------" << endl;
-
-    for (chNum_t ch_i : avail_channels) {
-        std::cout << (unsigned int) ch_i << "\t" << rriMod->map_ChanLoad[ch_i] << endl;
-        chanLoad_t load_i = 0;
-        if (rriMod->map_ChanLoad.count(ch_i)) {
-            load_i = rriMod->map_ChanLoad[ch_i];
-        }
-        if (load_i < min_load) {
-            min_load = load_i;
-            new_ch = ch_i;
-        }
-    }
-    std::cout << "-------------" << endl;
-
-    if (new_ch != cur_ch) {
-        // NS_LOG_INFO(rriMod->cpeId << ": setting channel to " << +new_ch << endl);
-        setChannelEvent(apMac, rriMod, node, new_ch);
-    } else {
-        NS_LOG_INFO(rriMod->cpeId << " decided to stay on channel " << +cur_ch);
-    }
+    cout << "received packet from " << sender << " to " << receiver << endl;
+    return true;
 }
 
 int
@@ -247,7 +301,7 @@ main(int argc, char* argv[])
     LogComponentEnable("twoRadio", LOG_LEVEL_INFO);
     LogComponentEnable("RriModuleMac", LOG_LEVEL_INFO);
     // LogComponentEnable("StaWifiMac", LOG_LEVEL_LOGIC);
-    // LogComponentEnable("WifiPhy", LOG_LEVEL_INFO);
+    //LogComponentEnable("WifiPhy", LOG_LEVEL_DEBUG);
 
     double start_scanning = 2.0;
     double scan_duration = 1.0;
@@ -339,8 +393,9 @@ main(int argc, char* argv[])
     Ssid ssids[] = {Ssid("AP1"), Ssid("AP2"), Ssid("AP3"), Ssid("AP4")};
 
     auto setupStaMainMac = [&](int sta_i, Ssid ssid) {
-        char macAddr[18] = {0};
-        sprintf(macAddr, "00:55:55:55:%02x:%02x", sta_i / 256, sta_i % 256);
+        TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
+        value.Set(WifiPhy::ChannelTuple {36, 20, WIFI_PHY_BAND_5GHZ, 0});
+        wiPhyHelper.Set("ChannelSettings", value);
         wifiMacHelper.SetType("ns3::ScanningStaWifiMac",
                         // "Ssid",
                         // SsidValue(ssid),
@@ -351,6 +406,10 @@ main(int argc, char* argv[])
         wiPhyHelper.Set("TxPowerStart", DoubleValue(17.0));
         wiPhyHelper.Set("TxPowerEnd", DoubleValue(17.0));
         staNetDev[sta_i] = wifiHelper.Install(wiPhyHelper, wifiMacHelper, wifiSTAnodes.Get(sta_i));
+        Ptr<WifiNetDevice> staNetDev_i = DynamicCast<WifiNetDevice>(staNetDev[sta_i].Get(0));
+        Ptr<ScanningStaWifiMac> staMac = DynamicCast<ScanningStaWifiMac>(DynamicCast<StaWifiMac>(staNetDev_i->GetMac()));
+        staMac->setOperatingChannel(36);
+
         // Ptr<StaWifiMac> apMac = DynamicCast<StaWifiMac>((apNetDev->GetMac()));
     };
 
@@ -365,8 +424,12 @@ main(int argc, char* argv[])
     NetDeviceContainer apNetDevices[AP_NETDEVS_COUNT];
     wiPhyHelper.Set("TxPowerStart", DoubleValue(23.0));
     wiPhyHelper.Set("TxPowerEnd", DoubleValue(23.0));
+    vector<uint32_t> chans{36, 36, 36, 36};
 
     auto setupAp = [&](int ap_i, Ssid ssid, unsigned long beaconInterval=102400) {
+        TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
+        value.Set(WifiPhy::ChannelTuple {chans[ap_i], 20, WIFI_PHY_BAND_5GHZ, 0});
+        wiPhyHelper.Set("ChannelSettings", value);
         wifiMacHelper.SetType("ns3::ApWifiMac",
                         "Ssid",
                         SsidValue(ssid),
@@ -523,6 +586,9 @@ main(int argc, char* argv[])
     // sink2.Add(packetSinkHelper.Install(wifiSTAnodes.Get(1))); // Install sink on STA2
     // sink2.Start(Seconds(15.1));
     // sink2.Stop(Seconds(17.0));
+    PacketSocketHelper packetSocket;
+    packetSocket.Install(wifiSTAnodes);
+    packetSocket.Install(wifiAPnodes);
 
     const string scriptName = "lccs";
     AnimationInterface anim(scriptName + ".xml");
@@ -543,6 +609,7 @@ main(int argc, char* argv[])
     for (int i = 0; i < AP_COUNT; i++) {
         setupAPAnimation(i);
     }
+    anim.UpdateNodeColor(wifiAPnodes.Get(0), 0, 255, 0); // scanning AP with green color
 
     auto setupSTAAnimation = [&](int i) {
         anim.UpdateNodeColor(wifiSTAnodes.Get(i), 0, 255, 0); // green
@@ -553,20 +620,6 @@ main(int argc, char* argv[])
     for (int i = 0; i < STA_COUNT; i++) {
         setupSTAAnimation(i);
     }
-
-    // auto scheduleClients = [&](int sta_i, double reassocPeriod, double delta) {
-    //     // Get pointer to the original station mac object for client
-    //     Ptr<WifiNetDevice> staNetDevMain = DynamicCast<WifiNetDevice>(staNetDev[2*sta_i].Get(0));
-    //     Ptr<StaWifiMac> staMacMain = DynamicCast<StaWifiMac>(staNetDevMain->GetMac());
-    //
-    //     // Get pointer to the measurement station mac object for client
-    //     Ptr<WifiNetDevice> staNetDevScan = DynamicCast<WifiNetDevice>(staNetDev[2*sta_i + 1].Get(0));
-    //     Ptr<RriModuleMac> rriMac = DynamicCast<RriModuleMac>(staNetDevScan->GetMac());
-    //
-    //     Simulator::Schedule(Seconds(reassocPeriod - delta), &rriModStaSnrData, rriMac); // measure snr before reassoc attempt
-    //     Simulator::Schedule(Seconds(reassocPeriod), &AssociateWithBestSNR, staMacMain, rriMac); // reassociate
-    //     Simulator::Schedule(Seconds(reassocPeriod + delta), &rriModStaSnrData, rriMac); // measure snr after reassoc attempt
-    // };
 
     // auto scheduleAp = [&](int ap_i) {
     //     // Get pointer to the original station mac object for client
@@ -579,66 +632,33 @@ main(int argc, char* argv[])
     //     Simulator::Schedule(Seconds(2.0), &RriModuleMac::Scan, rriMac);
     // };
 
-    // auto scheduleOtherAps = [&](int except_i) {
-    //     std::random_device rd;
-    //     std::mt19937 rng(rd());
-    //     std::uniform_int_distribution<> uniform_dis(0, avail_channels.size() - 1);
-    //     auto chan_it = avail_channels.begin();
-    //     for (int i = 0; i < AP_COUNT; i++) {
-    //         if (i != except_i) {
-    //             double channelSwitchPeriod = i+2;
-    //             // pick random channel to use
-    //             std::advance(chan_it, uniform_dis(rng));
-    //
-    //             Ptr<WifiNetDevice> apNetDevMain = DynamicCast<WifiNetDevice>(apNetDevices[2*i].Get(0));
-    //             Ptr<ApWifiMac> apMacMain = DynamicCast<ApWifiMac>(apNetDevMain->GetMac());
-    //             Ptr<WifiNetDevice> apNetDevScan = DynamicCast<WifiNetDevice>(apNetDevices[2*i + 1].Get(0));
-    //             Ptr<RriModuleMac> rriMac = DynamicCast<RriModuleMac>(apNetDevScan->GetMac());
-    //             uint8_t chan = *chan_it;
-    //             Simulator::Schedule(Seconds(channelSwitchPeriod), &setChannelEvent, apMacMain, rriMac, wifiAPnodes.Get(i), chan);
-    //         }
-    //     }
-    // };
-
-    NS_LOG_INFO("Scheduling AP 0 to use Least Congested Channel Scan.");
+    // NS_LOG_INFO("Scheduling AP 0 to use Least Congested Channel Scan.");
     // scheduleAp(0);
     // NS_LOG_INFO("Scheduling other APs to switch to random channels.");
     // scheduleOtherAps(0);
 
     // scheduleClients(0, 5.0, 0.1);
     // scheduleClients(1, 5.2, 0.1);
+    PacketSocketAddress socket;
+    socket.SetSingleDevice(staNetDev[0].Get(0)->GetIfIndex());
+    socket.SetPhysicalAddress(staNetDev[0].Get(1)->GetAddress());
+    socket.SetProtocol(1);
+    OnOffHelper onoff("ns3::PacketSocketFactory", Address(socket));
+    onoff.SetConstantRate(DataRate("500kb/s"));
+
+    ApplicationContainer apps = onoff.Install(wifiSTAnodes.Get(0));
+    apps.Start(Seconds(0.5));
+    apps.Stop(Seconds(20.0));
 
     Simulator::Stop(Seconds(20.0));
 
-    // Enable tracing for assoc / deassoc
-    // Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/$ns3::StaWifiMac/Assoc",
-    //                 MakeCallback(&TraceAssoc));
-    // Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/$ns3::StaWifiMac/DeAssoc",
-    //                 MakeCallback(&TraceDeassoc));
-    //
-    // Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/$ns3::ApWifiMac/MacRx", MakeCallback(&traceRx));
+    Ptr<WifiNetDevice> ap_i_NetDev = DynamicCast<WifiNetDevice>(apNetDevices[0].Get(0));
+    ap_i_NetDev->SetPromiscReceiveCallback(MonitoringModeRxCallback);
 
     // Start the simulation
     NS_LOG_INFO("Starting simulation.");
-    // Get pointer to the original station mac object for client
-    // Get pointer to the measurement station mac object for client
-    Ptr<WifiNetDevice> staNetDevScan = DynamicCast<WifiNetDevice>(staNetDev[0].Get(0));
-    Ptr<ScanningStaWifiMac> staMac = DynamicCast<ScanningStaWifiMac>(staNetDevScan->GetMac());
-    Simulator::Schedule(Seconds(2.0), &ScanningStaWifiMac::Scan, staMac);
 
     Simulator::Run();
-
-    // // Calculating throughput on each client
-    // auto printClientThroughput = [](ApplicationContainer sink, int client_name) {
-    //     cout << "----- Client " << client_name << " -----" << endl;
-    //     double totalPacketsThrough = DynamicCast<PacketSink>(sink.Get(0))->GetTotalRx();
-    //     cout << "Total Packets received = " << totalPacketsThrough << endl;
-    //     double thrpt = totalPacketsThrough * 8 / (2 * 1000.0);
-    //     cout << "Thrpt Kbps =  " << thrpt << endl;
-    // };
-    // printClientThroughput(sink1, 1);
-    // printClientThroughput(sink2, 2);
-    // cout << "-------------------" << endl;
 
 
     Simulator::Destroy();
