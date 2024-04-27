@@ -24,6 +24,7 @@
 
 #include "mgt-headers.h"
 #include "wifi-mac.h"
+#include "wifi-phy-operating-channel.h"
 
 #include "ns3/eht-configuration.h"
 
@@ -70,6 +71,18 @@ struct WifiScanParams
     {
         uint16_t number{0};                          ///< channel number
         WifiPhyBand band{WIFI_PHY_BAND_UNSPECIFIED}; ///< PHY band
+
+        bool operator==(const Channel& other) const {
+            return number == other.number && band == other.band;
+        }
+
+        Channel& operator=(const Channel& other) {
+            if (this != &other) {
+                number = other.number;
+                band = other.band;
+            }
+            return *this;
+        }
     };
 
     /// typedef for a list of channels
@@ -392,6 +405,8 @@ class StaWifiMac : public WifiMac
      * \return true if active probing is enabled, false otherwise
      */
     bool GetActiveProbing() const;
+
+    void UpdateScanningChannel();
 
     /**
      * Determine whether the supported rates indicated in a given Beacon frame or

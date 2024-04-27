@@ -30,6 +30,7 @@
 #include "wifi-assoc-manager.h"
 #include "wifi-mac-queue.h"
 #include "wifi-net-device.h"
+#include "wifi-phy-band.h"
 #include "wifi-phy.h"
 
 #include "ns3/attribute-container.h"
@@ -352,6 +353,7 @@ void
 StaWifiMac::SendProbeRequest(uint8_t linkId)
 {
     NS_LOG_FUNCTION(this << linkId);
+    NS_LOG_DEBUG("Sending Probe Request on channel " << GetCurrentChannel(linkId).number);
     WifiMacHeader hdr;
     hdr.SetType(WIFI_MAC_MGT_PROBE_REQUEST);
     hdr.SetAddr1(Mac48Address::GetBroadcast());
@@ -409,6 +411,7 @@ StaWifiMac::GetAssociationRequest(bool isReassoc, uint8_t linkId) const
     std::variant<MgtAssocRequestHeader, MgtReassocRequestHeader> mgtFrame;
 
     if (isReassoc)
+
     {
         MgtReassocRequestHeader reassoc;
         reassoc.SetCurrentApAddress(GetBssid(linkId));
@@ -703,17 +706,20 @@ StaWifiMac::TryToEnsureAssociated()
     switch (m_state)
     {
     case ASSOCIATED:
+        NS_LOG_LOGIC("State: ASSOCIATED");
         return;
     case SCANNING:
         /* we have initiated active or passive scanning, continue to wait
            and gather beacons or probe responses until the scanning timeout
          */
+        NS_LOG_LOGIC("State: SCANNING");
         break;
     case UNASSOCIATED:
         /* we were associated but we missed a bunch of beacons
          * so we should assume we are not associated anymore.
          * We try to initiate a scan now.
          */
+        NS_LOG_LOGIC("State: UNASSOCIATED");
         m_linkDown();
         StartScanning();
         break;
@@ -723,12 +729,14 @@ StaWifiMac::TryToEnsureAssociated()
            wait until either assoc-request-timeout or until
            we get an association response.
          */
+        NS_LOG_LOGIC("State: WAIT_ASSOC_RESP");
         break;
     case REFUSED:
         /* we have sent an association request and received a negative
            association response. We wait until someone restarts an
            association with a given SSID.
          */
+        NS_LOG_LOGIC("State: REFUSED");
         break;
     }
 }
@@ -740,6 +748,17 @@ StaWifiMac::StartScanning()
     SetState(SCANNING);
     NS_ASSERT(m_assocManager);
 
+    if (IsWaitAssocResp()) {
+        NS_LOG_DEBUG("Waiting for association response; do not start scanning and channel switching");
+        Simulator::Schedule(m_assocRequestTimeout, &StaWifiMac::AssocRequestTimeout, this);
+        return;
+    }
+    else if (IsAssociated()) {
+        NS_LOG_DEBUG("Already associated; do not start scanning");
+        return;
+    }
+
+
     WifiScanParams scanParams;
     scanParams.ssid = GetSsid();
     for (const auto& [id, link] : GetLinks())
@@ -747,7 +766,6 @@ StaWifiMac::StartScanning()
         WifiScanParams::ChannelList channel{
             (link->phy->HasFixedPhyBand()) ? WifiScanParams::Channel{0, link->phy->GetPhyBand()}
                                            : WifiScanParams::Channel{0, WIFI_PHY_BAND_UNSPECIFIED}};
-
         scanParams.channelList.push_back(channel);
     }
     if (m_activeProbing)
@@ -765,6 +783,44 @@ StaWifiMac::StartScanning()
     m_assocManager->StartScanning(std::move(scanParams));
 }
 
+void StaWifiMac::UpdateScanningChannel() {
+    NS_LOG_FUNCTION(this);
+    const uint8_t linkId = 0;
+    Ptr<WifiPhy> phy = GetWifiPhy(linkId);
+    uint8_t chan = phy->GetOperatingChannel().GetNumber();
+    const uint8_t max_chan = 11;
+    chan = (chan + 1) % (max_chan + 1);
+    auto channelToSwitch = WifiPhyOperatingChannel(
+            WifiPhyOperatingChannel::FindFirst(
+                chan,
+                0,
+                phy->GetChannelWidth(),
+                phy->GetStandard(),
+                phy->GetPhyBand()
+    ));
+
+    if (phy->IsStateSwitching())
+    {
+        // Try again after some time, same channel
+        NS_LOG_LOGIC(Simulator::Now().GetSeconds() << "s: Channel switch in progress, switch to "
+                << +chan << " cancelled");
+        // Simulator::Schedule(MilliSeconds(100), &StaWifiMac::SetOperatingChannel, this);
+        return;
+    }
+    if (phy->IsStateSleep())
+    {
+        phy->ResumeFromSleep();
+    }
+    NS_LOG_LOGIC(Simulator::Now().GetSeconds() << "s: Switch STA " << GetAddress() << " to channel " << +chan);
+    WifiPhy::ChannelTuple chTuple{
+        channelToSwitch.GetNumber(),
+        channelToSwitch.GetWidth(),
+        channelToSwitch.GetPhyBand(),
+        channelToSwitch.GetPrimaryChannelIndex(20)
+    };
+    phy->SetOperatingChannel(chTuple);
+}
+
 void
 StaWifiMac::ScanningTimeout(const std::optional<ApInfo>& bestAp)
 {
@@ -772,12 +828,18 @@ StaWifiMac::ScanningTimeout(const std::optional<ApInfo>& bestAp)
 
     if (!bestAp.has_value())
     {
-        NS_LOG_DEBUG("Exhausted list of candidate AP; restart scanning");
+        NS_LOG_LOGIC( Simulator::Now().GetSeconds() << "s: " <<
+                "Exhausted list of candidate AP" <<
+                " for STA " << GetAddress() <<
+                " on channel " <<
+                +GetWifiPhy(0)->GetOperatingChannel().GetNumber() <<
+                "; restart scanning on another channel");
+        UpdateScanningChannel();
         StartScanning();
         return;
     }
 
-    NS_LOG_DEBUG("Attempting to associate with AP: " << *bestAp);
+    NS_LOG_LOGIC("Attempting to associate with AP: " << *bestAp);
     UpdateApInfo(bestAp->m_frame, bestAp->m_apAddr, bestAp->m_bssid, bestAp->m_linkId);
     // reset info on links to setup
     for (auto& [id, link] : GetLinks())
@@ -858,7 +920,7 @@ StaWifiMac::MissedBeacons()
                                                this);
         return;
     }
-    NS_LOG_DEBUG("beacon missed");
+    NS_LOG_LOGIC("beacon missed");
     // We need to switch to the UNASSOCIATED state. However, if we are receiving a frame, wait
     // until the RX is completed (otherwise, crashes may occur if we are receiving a MU frame
     // because its reception requires the STA-ID). We need to check that a PHY is operating on
@@ -891,7 +953,7 @@ StaWifiMac::Disassociated()
         bssid = std::nullopt; // link is no longer setup
     }
 
-    NS_LOG_DEBUG("Set state to UNASSOCIATED and start scanning");
+    NS_LOG_LOGIC("Set state to UNASSOCIATED and start scanning");
     SetState(UNASSOCIATED);
     // cancel the association request timer (see issue #862)
     m_assocRequestEvent.Cancel();
@@ -1031,6 +1093,12 @@ StaWifiMac::Enqueue(Ptr<Packet> packet, Mac48Address to)
     hdr.SetAddr3(to);
     hdr.SetDsNotFrom();
     hdr.SetDsTo();
+
+    std::stringstream ss;
+    hdr.Print(ss);
+    NS_LOG_DEBUG("Enqueueing frame for transmission, ch: "
+            << +GetWifiPhy(0)->GetChannelNumber()
+            << ", frame: " << ss.str());
 
     if (GetQosSupported())
     {
@@ -1217,6 +1285,7 @@ StaWifiMac::ReceiveBeacon(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
     NS_ASSERT(hdr.IsBeacon());
 
     NS_LOG_DEBUG("Beacon received");
+    NS_LOG_INFO("Beacon received");
     MgtBeaconHeader beacon;
     mpdu->GetPacket()->PeekHeader(beacon);
     const auto& capabilities = beacon.Capabilities();
@@ -1278,7 +1347,7 @@ StaWifiMac::ReceiveProbeResp(Ptr<const WifiMpdu> mpdu, uint8_t linkId)
     const WifiMacHeader& hdr = mpdu->GetHeader();
     NS_ASSERT(hdr.IsProbeResp());
 
-    NS_LOG_DEBUG("Probe response received from " << hdr.GetAddr2());
+    NS_LOG_DEBUG("Probe response received from " << hdr.GetAddr2() << "on channel " << GetCurrentChannel(linkId).number);
     MgtProbeResponseHeader probeResp;
     mpdu->GetPacket()->PeekHeader(probeResp);
     if (!CheckSupportedRates(probeResp, linkId))
@@ -1938,7 +2007,7 @@ StaWifiMac::GetSupportedRates(uint8_t linkId) const
     for (const auto& mode : GetWifiPhy(linkId)->GetModeList())
     {
         uint64_t modeDataRate = mode.GetDataRate(GetWifiPhy(linkId)->GetChannelWidth());
-        NS_LOG_DEBUG("Adding supported rate of " << modeDataRate);
+        // NS_LOG_DEBUG("Adding supported rate of " << modeDataRate);
         rates.AddSupportedRate(modeDataRate);
     }
     if (GetHtSupported())
