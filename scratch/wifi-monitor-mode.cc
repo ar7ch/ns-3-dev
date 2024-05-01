@@ -47,6 +47,9 @@ using namespace ns3;
 using std::cout, std::endl, std::setw, std::setprecision, std::vector, std::string, std::map, std::set;
 NS_LOG_COMPONENT_DEFINE("wifi-monitor-mode");
 
+#define LOG_LOGIC(x) do { NS_LOG_LOGIC(std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
+#define LOG_DEBUG(x) do { NS_LOG_DEBUG(std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
+
 /// True for verbose output.
 static bool g_verbose = false;
 static bool g_debug = false;
@@ -56,20 +59,20 @@ static bool g_debug = false;
  *
  * \param node The node.
  */
-static void
-AdvancePosition(Ptr<Node> node)
-{
-    Ptr<MobilityModel> mobility = node->GetObject<MobilityModel>();
-    Vector pos = mobility->GetPosition();
-    pos.x += 5.0;
-    if (pos.x >= 210.0)
-    {
-        return;
-    }
-    mobility->SetPosition(pos);
-
-    Simulator::Schedule(Seconds(1.0), &AdvancePosition, node);
-}
+// static void
+// AdvancePosition(Ptr<Node> node)
+// {
+//     Ptr<MobilityModel> mobility = node->GetObject<MobilityModel>();
+//     Vector pos = mobility->GetPosition();
+//     pos.x += 5.0;
+//     if (pos.x >= 210.0)
+//     {
+//         return;
+//     }
+//     mobility->SetPosition(pos);
+//
+//     Simulator::Schedule(Seconds(1.0), &AdvancePosition, node);
+// }
 
 
 string assembleChannelSettings(uint16_t channel, uint16_t width, string band) {
@@ -81,6 +84,36 @@ string assembleChannelSettings(uint16_t channel, uint16_t width, string band) {
         << band
         << ", " << "0" << "}";
     return ss.str();
+}
+
+void switchChannelv2(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel, WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20) {
+    Ptr<WifiPhy> phy = dev->GetPhy();
+    if (phy->IsStateSleep())
+    {
+        phy->ResumeFromSleep();
+    }
+    if (phy->IsStateSwitching()){
+        NS_LOG_DEBUG(Simulator::Now().GetSeconds() << "s: AP channel switch is in progress, postpone the switch");
+        Simulator::Schedule(Seconds(0.1), &switchChannelv2, dev, newOperatingChannel, band, width);
+    }
+
+
+    WifiPhyOperatingChannel channelToSwitch = WifiPhyOperatingChannel(WifiPhyOperatingChannel::FindFirst(
+                    newOperatingChannel,
+                    0,
+                    20,
+                    phy->GetStandard(),
+                    band
+                    )
+                );
+    NS_LOG_DEBUG(Simulator::Now().GetSeconds() <<
+            "s: switch AP channel: " << +phy->GetOperatingChannel().GetNumber() <<
+            "->" << +channelToSwitch.GetNumber());
+    WifiPhy::ChannelTuple chTuple{channelToSwitch.GetNumber(),
+        channelToSwitch.GetWidth(),
+        channelToSwitch.GetPhyBand(),
+        channelToSwitch.GetPrimaryChannelIndex(20)};
+    phy->SetOperatingChannel(chTuple);
 }
 
 void switchChannel(Ptr<WifiNetDevice> dev, uint16_t operatingChannel, WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20) {
@@ -119,7 +152,10 @@ public:
             channel(channel), width(width), snr(snr), rssi(rssi) {}
     };
 
-    Scanner(Ptr<WifiNetDevice> wifidev, vector<uint16_t> scanlist, vector<uint16_t> opChannelsList) : channelsToScan(scanlist), operatingChannelsList(opChannelsList), dev(wifidev) {}
+    Scanner(Ptr<WifiNetDevice> wifidev,
+            vector<uint16_t> opChannelsList) : dev(wifidev),
+                                                channelsToScan(opChannelsList),
+                                                operatingChannelsList(opChannelsList) {}
     ~Scanner() {}
 
     void Scan() {
@@ -143,14 +179,12 @@ public:
     uint16_t getOperatingChannel() {
         return dev->GetPhy()->GetChannelNumber();
     }
-    // std::map<uint16_t, std::set<Mac48Address>> apMap;
     std::map<Mac48Address, ScanData> knownAps;
-    // std::set<Mac48Address> tempChannelScanResults;
-    // std::set<Mac48Address> knownAps;
 private:
-    std::vector<uint16_t> channelsToScan;
-    std::vector<uint16_t> operatingChannelsList;
     Ptr<WifiNetDevice> dev;
+    vector<uint16_t> channelsToScan;
+    vector<uint16_t> operatingChannelsList;
+
     /*
      * Initial idea: for each channel, scan it for 0.5s sequentially. This sequential scan is launched once in a while by a scheduled Scan callback.
      * As an idea for next iteration, implement real-life behavior: AP switches to channel to scan, then returns back to operating channel, then switches to the next channel to scan
@@ -182,37 +216,45 @@ private:
                 << ", SNR: " << scanData.snr
                 << ", RSSI: " << scanData.rssi << endl;
         }
-        const int no_data_metric = -1;
-        vector<int> metric(operatingChannelsList.size(), no_data_metric);
+        const int NO_DATA_METRIC = 0;
+        std::map<int, int> metric;
+        for (auto& channel : operatingChannelsList) {
+            metric[channel] = NO_DATA_METRIC;
+        }
         for (auto& [bssid, scanData] : knownAps) {
-            if (metric[scanData.channel] == no_data_metric) {
-                metric[scanData.channel] = 0;
+            if (metric[scanData.channel] == NO_DATA_METRIC) {
+                metric[scanData.channel] = 0; // start with neutral metric value
             }
             metric[scanData.channel]++;
             metric[scanData.channel] += 10*scanData.clients.size();
         }
+
+        // find the channel with the lowest metric
         int minMetric = INT_MAX;
-        size_t minChannelIdx = 0;
-        for (size_t i = 0; i < metric.size(); i++) {
-            cout << "channel " << operatingChannelsList[i] << " metric: " << metric[i];
-            if (metric[i] < minMetric) {
-                if (metric[i] == no_data_metric &&
+        int newChannel = 0;
+        for (int ch_i : operatingChannelsList) {
+            cout << "channel " << ch_i << " metric: " << metric[ch_i];
+            if (metric[ch_i] < minMetric) {
+                if (metric[ch_i] == NO_DATA_METRIC &&
                         std::find(channelsToScan.begin(), channelsToScan.end(),
-                            operatingChannelsList[i]) == channelsToScan.end() ) {
+                            ch_i) == channelsToScan.end() ) {
                     cout << " (no scan data for this channel)" << endl;
+                    assert(false);
                     continue;
                 }
-                minMetric = metric[i];
-                minChannelIdx = i;
+                minMetric = metric[ch_i];
+                newChannel = ch_i;
             }
             cout << endl;
         }
-        uint16_t newChannel = operatingChannelsList[minChannelIdx];
-        cout << "switching to channel " << newChannel << endl;
+        LOG_LOGIC("LCCS: switching to channel " << newChannel);
         switchChannel(dev, newChannel);
     }
 };
 
+// since no additional parameters can be passed to the callback, we maintain
+// a global map that Scanners can be accessed by the trace context
+// (that contains info about device and corresponding scanner)
 static map<string, std::shared_ptr<Scanner>> scannerByTraceContext;
 
 map<uint16_t, uint16_t> ofdmFreqToChanNumber = {
@@ -331,9 +373,12 @@ int main(int argc, char* argv[]) {
     // if
     if (g_debug) {
         LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_DEBUG);
+    } else {
+        LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_LOGIC);
     }
-    LogComponentEnable("StaWifiMac", LOG_LEVEL_DEBUG);
-    LogComponentEnable("WifiDefaultAssocManager", LOG_LEVEL_DEBUG);
+    LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_LOGIC);
+    // LogComponentEnable("StaWifiMac", LOG_LEVEL_LOGIC);
+    // LogComponentEnable("WifiDefaultAssocManager", LOG_LEVEL_LO);
 
     WifiHelper wifi;
     MobilityHelper mobility;
@@ -364,9 +409,9 @@ int main(int argc, char* argv[]) {
     YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
     wifiPhy.SetChannel(wifiChannel.Create());
     // initial channel settings
-    TupleValue<UintegerValue, UintegerValue, EnumValue, UintegerValue> value;
-    value.Set(WifiPhy::ChannelTuple {1, 20, WIFI_PHY_BAND_2_4GHZ, 0});
-    wifiPhy.Set("ChannelSettings", value);
+    TupleValue<UintegerValue, UintegerValue, EnumValue<WifiPhyBand>, UintegerValue> channelValue;
+    channelValue.Set(WifiPhy::ChannelTuple {1, 20, WIFI_PHY_BAND_2_4GHZ, 0});
+    wifiPhy.Set("ChannelSettings", channelValue);
 
     Ssid ssid = Ssid("wifi-default");
     auto setupSta = [&]() {
@@ -466,16 +511,17 @@ int main(int argc, char* argv[]) {
     std::stringstream ss;
     ss << "/NodeList/" << scanAp.Get(0)->GetId() << "/DeviceList/" << scanAp.Get(0)->GetDevice(0)->GetIfIndex() << "/$ns3::WifiNetDevice/Phy/MonitorSnifferRx";
     string scanApTraceStr = ss.str();
-    vector<uint16_t> scanlist{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    vector<uint16_t> availableChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    std::shared_ptr<Scanner> scanner = std::make_shared<Scanner>(scanApNetDev, scanlist, availableChannels);
+    // vector<uint16_t> scanlist{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    // vector<uint16_t> availableChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    vector<uint16_t> operatingChannels{1, 6, 11};
+    std::shared_ptr<Scanner> scanner = std::make_shared<Scanner>(scanApNetDev, operatingChannels);
     scannerByTraceContext[scanApTraceStr] = scanner;
     Config::Connect(scanApTraceStr, MakeCallback(&monitorSniffer));
     switchChannel(scanApNetDev, 1);
 
     Simulator::Schedule(Seconds(1.5), &switchChannel, apNetDev, 11, WIFI_PHY_BAND_2_4GHZ, 20);
     // Simulator::Schedule(Seconds(8.0), &switchChannel, apNetDev, 1, WIFI_PHY_BAND_2_4GHZ, 20);
-    // Simulator::Schedule(Seconds(0.5), &Scanner::Scan, &(*scanner));
+    Simulator::Schedule(Seconds(0.5), &Scanner::Scan, &(*scanner));
     Simulator::Run();
     Simulator::Destroy();
 
