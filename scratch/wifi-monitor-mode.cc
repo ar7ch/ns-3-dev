@@ -53,6 +53,7 @@ NS_LOG_COMPONENT_DEFINE("wifi-monitor-mode");
 /// True for verbose output.
 static bool g_verbose = false;
 static bool g_debug = false;
+static bool g_logic = false;
 
 /**
  * Move a node position by 5m on the x axis every second, up to 210m.
@@ -137,6 +138,17 @@ void switchChannel(Ptr<WifiNetDevice> dev, uint16_t operatingChannel, WifiPhyBan
     // assert(phy->GetOperatingChannel().GetNumber() == operatingChannel);
 }
 
+// class Scanner {
+// public:
+//     Scanner() = delete;
+//     virtual ~Scanner() {};
+//     virtual void Scan() = 0;
+//     virtual void PrintScanResults() = 0;
+//     virtual void addAp(uint16_t channel, Mac48Address bssid) = 0;
+//
+//     uint16_t getOperatingChannel();
+// };
+
 class Scanner {
 public:
     struct ScanData {
@@ -160,6 +172,7 @@ public:
 
     void Scan() {
         Ptr<WifiPhy> phy = dev->GetPhy();
+        dataChannel = phy->GetChannelNumber();
         Simulator::ScheduleNow(&Scanner::scanChannel, this, channelsToScan.begin());
     }
 
@@ -181,25 +194,33 @@ public:
     }
     std::map<Mac48Address, ScanData> knownAps;
 private:
+    double channelDwellTime_s = 0.2;
+    double scanInterval_s = 1.0;
+    int dataChannel;
     Ptr<WifiNetDevice> dev;
     vector<uint16_t> channelsToScan;
     vector<uint16_t> operatingChannelsList;
 
-    /*
-     * Initial idea: for each channel, scan it for 0.5s sequentially. This sequential scan is launched once in a while by a scheduled Scan callback.
-     * As an idea for next iteration, implement real-life behavior: AP switches to channel to scan, then returns back to operating channel, then switches to the next channel to scan
-     */
-    void scanChannel(std::vector<uint16_t>::iterator chanIt) {
-        if (chanIt == channelsToScan.end()) {
+    void scanChannel(std::vector<uint16_t>::iterator nextChanIt) {
+        if (nextChanIt == channelsToScan.end()) {
             Simulator::ScheduleNow(&Scanner::lccsDecide, this);
             return;
         }
-        uint16_t channel = *chanIt;
+        uint16_t channel = *nextChanIt;
         switchChannel(dev, channel);
-        cout << setprecision(7) << Simulator::Now().GetSeconds() << "s: " <<
-            "scanning channel " << channel << endl;
-        chanIt++;
-        Simulator::Schedule(Seconds(0.2), &Scanner::scanChannel, this, chanIt);
+        LOG_LOGIC("Scanning channel " << +channel);
+        nextChanIt++;
+        Simulator::Schedule(Seconds(channelDwellTime_s), &Scanner::returnToDataChannel, this, nextChanIt);
+    }
+
+    void returnToDataChannel(std::vector<uint16_t>::iterator nextChanIt) {
+        switchChannel(dev, dataChannel);
+        LOG_LOGIC("Returning to data channel " << +dataChannel);
+        if (nextChanIt != channelsToScan.end() && *nextChanIt == dataChannel) {
+            LOG_LOGIC("Skipping scan for data channel");
+            nextChanIt++;
+        }
+        Simulator::Schedule(Seconds(scanInterval_s), &Scanner::scanChannel, this, nextChanIt);
     }
 
     void lccsDecide() {
@@ -305,23 +326,25 @@ void monitorSniffer(
         MpduInfo aMpdu,
         SignalNoiseDbm signalNoise,
         uint16_t staId) {
+
     Ptr<Packet> packet = p->Copy();
-    // if (g_verbose) {
-    //     cout << setw(7) << std::fixed << std::setprecision(5) << Simulator::Now().GetSeconds() << "s: ";
-    //     cout << "context: " << context << ", ";
-    //     packet->Print(cout);
-    //     cout << endl;
-    // }
 
     WifiMacHeader hdr;
     packet->RemoveHeader(hdr);
-    if (g_verbose) {
+    if (g_verbose || g_debug) {
         cout << setw(7) << std::fixed << std::setprecision(5) << Simulator::Now().GetSeconds() << "s: ";
         hdr.Print(cout);
         cout << endl;
         if (hdr.IsQosData()) {
-            cout << "QoS data! " << "RA: " << hdr.GetAddr1() << " TA: " << hdr.GetAddr2() << " DA: " << hdr.GetAddr3() << " SA: " << hdr.GetAddr4() << " FromDS: " << hdr.IsFromDs() << " ToDS: " << hdr.IsToDs()
-            << " Retry: " << hdr.IsRetry() << endl;
+            cout << "QoS data! "
+                << "RA: " << hdr.GetAddr1()
+                << " TA: " << hdr.GetAddr2()
+                << " DA: " << hdr.GetAddr3()
+                << " SA: " << hdr.GetAddr4()
+                << " FromDS: " << hdr.IsFromDs()
+                << " ToDS: " << hdr.IsToDs()
+                << " Retry: " << hdr.IsRetry()
+                << endl;
         }
     }
     std::shared_ptr<Scanner> scanner = scannerByTraceContext[context];
@@ -350,22 +373,37 @@ void monitorSniffer(
         if (scanner->knownAps.count(bssid)) {
             scanner->knownAps[bssid].clients.insert(client);
         }
-        // code below only complicates the matter. commented for now
-        // else {
-        //     double snr = -1;
-        //     double rssi = -1;
-        //     Scanner::ScanData scanData{0, 20, rssi, snr};
-        //     scanData.clients.insert(client);
-        //     scanner->knownAps[bssid] = scanData;
-        // }
-        NS_LOG_DEBUG("Data from " << client << " to " << bssid << " on channel " << scanner->getOperatingChannel());
+        NS_LOG_DEBUG("Data from " << client
+                        << " to " << bssid
+                        << " on channel " << scanner->getOperatingChannel());
     }
+}
+
+Ptr<WifiNetDevice> getWifiNd (Ptr<Node> node, int idx=0) {
+    return DynamicCast<WifiNetDevice>(node->GetDevice(idx));
+};
+
+
+std::shared_ptr<Scanner>
+CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChannels) {
+
+    Ptr<WifiNetDevice> scannerWifiNetDev = getWifiNd(scannerWifiNode);
+    std::stringstream ss;
+    ss << "/NodeList/" << scannerWifiNode->GetId()
+        << "/DeviceList/" << scannerWifiNetDev->GetIfIndex()
+        << "/$ns3::WifiNetDevice/Phy/MonitorSnifferRx";
+    string scanApTraceStr = ss.str();
+    std::shared_ptr<Scanner> scanner = std::make_shared<Scanner>(scannerWifiNetDev, operatingChannels);
+    scannerByTraceContext[scanApTraceStr] = scanner;
+    Config::Connect(scanApTraceStr, MakeCallback(&monitorSniffer));
+    return scanner;
 }
 
 int main(int argc, char* argv[]) {
     CommandLine cmd(__FILE__);
     cmd.AddValue("verbose", "Print trace information if true", g_verbose);
     cmd.AddValue("debug", "Print debug information if true", g_debug);
+    cmd.AddValue("logic", "Enable info debug level", g_logic);
     cmd.Parse(argc, argv);
 
     Packet::EnablePrinting();
@@ -373,11 +411,11 @@ int main(int argc, char* argv[]) {
     // if
     if (g_debug) {
         LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_DEBUG);
-    } else {
-        LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_LOGIC);
+        LogComponentEnable("StaWifiMac", LOG_LEVEL_DEBUG);
+    } else if (g_logic) {
+        LogComponentEnable("StaWifiMac", LogLevel(LOG_LEVEL_LOGIC & (~LOG_FUNCTION)));
     }
     LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_LOGIC);
-    // LogComponentEnable("StaWifiMac", LOG_LEVEL_LOGIC);
     // LogComponentEnable("WifiDefaultAssocManager", LOG_LEVEL_LO);
 
     WifiHelper wifi;
@@ -428,23 +466,26 @@ int main(int argc, char* argv[]) {
     // setup stas.
     setupSta();
 
-    // setup ap.
-    auto setupAp = [&]() {
-        wifiMac.SetType("ns3::ApWifiMac",
-                        "Ssid",
-                        SsidValue(ssid),
-                        "QosSupported",
-                        BooleanValue(false)
-        );
-        apDevs = wifi.Install(wifiPhy, wifiMac, ap);
-    };
+    wifiMac.SetType("ns3::ApWifiMac",
+            "Ssid",
+            SsidValue(ssid),
+            "QosSupported",
+            BooleanValue(false)
+            );
+    apDevs.Add(wifi.Install(wifiPhy, wifiMac, ap.Get(0)));
 
-    setupAp();
+    wifiMac.SetType("ns3::ApWifiMac",
+            "Ssid",
+            SsidValue(Ssid("ssid-2")),
+            "QosSupported",
+            BooleanValue(false)
+            );
+    apDevs.Add(wifi.Install(wifiPhy, wifiMac, ap.Get(1)));
 
     // setup scanning ap
     wifiMac.SetType("ns3::ApWifiMac",
             "Ssid", SsidValue(Ssid("scan-ap-ssid")),
-            "BeaconGeneration", BooleanValue(false)
+            "BeaconGeneration", BooleanValue(true)
     );
     wifi.Install(wifiPhy, wifiMac, scanAp);
 
@@ -457,15 +498,11 @@ int main(int argc, char* argv[]) {
 
     // -------------------
 
-    auto getWifiNd = [](Ptr<Node> node, int idx=0) {
-        return DynamicCast<WifiNetDevice>(node->GetDevice(idx));
-    };
-
     //
     Ptr<WifiNetDevice> scanApNetDev = getWifiNd(scanAp.Get(0));
     Ptr<WifiNetDevice> apNetDev = getWifiNd(ap.Get(0));
     Ptr<WifiNetDevice> ap2NetDev = getWifiNd(ap.Get(1));
-    switchChannel(ap2NetDev, 6);
+    switchChannel(ap2NetDev, 1);
 
     InternetStackHelper stack;
     stack.Install(stas);
@@ -482,9 +519,13 @@ int main(int argc, char* argv[]) {
     ApplicationContainer serverApps = echoServer.Install(stas.Get(0));
 
     UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
-    echoClient.SetAttribute("MaxPackets", UintegerValue(0));
-    echoClient.SetAttribute("Interval", TimeValue(Seconds(0.1)));
+    double maxPackets = 0; // 0 means unlimited
+    double packetInterval = 0.005;
+    int packetSize = 1024;
+    echoClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
+    echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
     echoClient.SetAttribute("PacketSize", UintegerValue(1024));
+    NS_LOG_LOGIC("Packets rate: " << ((packetSize / packetInterval) / 1024) * 8 << " kbps");
     ApplicationContainer clientApps = echoClient.Install(stas.Get(1));
 
     /* Populate routing table */
@@ -508,23 +549,17 @@ int main(int argc, char* argv[]) {
     cout << "STA2 mac: " << stas.Get(1)->GetDevice(0)->GetAddress() << endl;
     cout << "scanning ap bssid: " << scanAp.Get(0)->GetDevice(0)->GetAddress() << endl;
 
-    std::stringstream ss;
-    ss << "/NodeList/" << scanAp.Get(0)->GetId() << "/DeviceList/" << scanAp.Get(0)->GetDevice(0)->GetIfIndex() << "/$ns3::WifiNetDevice/Phy/MonitorSnifferRx";
-    string scanApTraceStr = ss.str();
-    // vector<uint16_t> scanlist{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    // vector<uint16_t> availableChannels{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    Ptr<Node> scannerWifiNode= ap.Get(0);
     vector<uint16_t> operatingChannels{1, 6, 11};
-    std::shared_ptr<Scanner> scanner = std::make_shared<Scanner>(scanApNetDev, operatingChannels);
-    scannerByTraceContext[scanApTraceStr] = scanner;
-    Config::Connect(scanApTraceStr, MakeCallback(&monitorSniffer));
-    switchChannel(scanApNetDev, 1);
+    auto scanner = CreateScannerForNode(scannerWifiNode, operatingChannels);
 
-    Simulator::Schedule(Seconds(1.5), &switchChannel, apNetDev, 11, WIFI_PHY_BAND_2_4GHZ, 20);
-    // Simulator::Schedule(Seconds(8.0), &switchChannel, apNetDev, 1, WIFI_PHY_BAND_2_4GHZ, 20);
-    Simulator::Schedule(Seconds(0.5), &Scanner::Scan, &(*scanner));
+    switchChannel(scanApNetDev, 11);
+
+    Simulator::Schedule(Seconds(2.5), &Scanner::Scan, &(*scanner));
     Simulator::Run();
     Simulator::Destroy();
 
     scanner->PrintScanResults();
     return 0;
 }
+
