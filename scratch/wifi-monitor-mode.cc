@@ -138,16 +138,19 @@ void switchChannel(Ptr<WifiNetDevice> dev, uint16_t operatingChannel, WifiPhyBan
     // assert(phy->GetOperatingChannel().GetNumber() == operatingChannel);
 }
 
-// class Scanner {
-// public:
-//     Scanner() = delete;
-//     virtual ~Scanner() {};
-//     virtual void Scan() = 0;
-//     virtual void PrintScanResults() = 0;
-//     virtual void addAp(uint16_t channel, Mac48Address bssid) = 0;
-//
-//     uint16_t getOperatingChannel();
-// };
+Ptr<WifiNetDevice> getWifiNd (Ptr<Node> node, int idx=0) {
+    return DynamicCast<WifiNetDevice>(node->GetDevice(idx));
+};
+
+class Scanner;
+
+class LCCSAlgo {
+public:
+    LCCSAlgo() = delete;
+
+    static void Decide(const Scanner* const scanner);
+
+};
 
 class Scanner {
 public:
@@ -174,6 +177,22 @@ public:
         Ptr<WifiPhy> phy = dev->GetPhy();
         dataChannel = phy->GetChannelNumber();
         Simulator::ScheduleNow(&Scanner::scanChannel, this, channelsToScan.begin());
+    }
+
+    const Ptr<WifiNetDevice> GetDevice() const {
+        return dev;
+    }
+
+    const map<Mac48Address, ScanData>& GetKnownAps() const {
+        return knownAps;
+    }
+
+    const vector<uint16_t>& GetOperatingChannelsList() const {
+        return operatingChannelsList;
+    }
+
+    const vector<uint16_t>& GetChannelsToScan() const {
+        return channelsToScan;
     }
 
     void PrintScanResults() {
@@ -203,7 +222,7 @@ private:
 
     void scanChannel(std::vector<uint16_t>::iterator nextChanIt) {
         if (nextChanIt == channelsToScan.end()) {
-            Simulator::ScheduleNow(&Scanner::lccsDecide, this);
+            Simulator::ScheduleNow(&LCCSAlgo::Decide, this);
             return;
         }
         uint16_t channel = *nextChanIt;
@@ -223,55 +242,61 @@ private:
         Simulator::Schedule(Seconds(scanInterval_s), &Scanner::scanChannel, this, nextChanIt);
     }
 
-    void lccsDecide() {
-        // least congested channel selection
-        // for each possible channel, calculate channel metric: number of APs + number of clients
-        // choose the channel with the lowest metric
-        // if the metric is the same, choose the channel with the lowest number
-        cout << "Running LCCS" << endl;
-        cout << "Gathered scan data:" << endl;
-        for (auto& [bssid, scanData] : knownAps) {
-            cout << "BSSID: " << bssid
-                << ", channel: " << scanData.channel
-                << ", clients: " << scanData.clients.size()
-                << ", SNR: " << scanData.snr
-                << ", RSSI: " << scanData.rssi << endl;
-        }
-        const int NO_DATA_METRIC = 0;
-        std::map<int, int> metric;
-        for (auto& channel : operatingChannelsList) {
-            metric[channel] = NO_DATA_METRIC;
-        }
-        for (auto& [bssid, scanData] : knownAps) {
-            if (metric[scanData.channel] == NO_DATA_METRIC) {
-                metric[scanData.channel] = 0; // start with neutral metric value
-            }
-            metric[scanData.channel]++;
-            metric[scanData.channel] += 10*scanData.clients.size();
-        }
-
-        // find the channel with the lowest metric
-        int minMetric = INT_MAX;
-        int newChannel = 0;
-        for (int ch_i : operatingChannelsList) {
-            cout << "channel " << ch_i << " metric: " << metric[ch_i];
-            if (metric[ch_i] < minMetric) {
-                if (metric[ch_i] == NO_DATA_METRIC &&
-                        std::find(channelsToScan.begin(), channelsToScan.end(),
-                            ch_i) == channelsToScan.end() ) {
-                    cout << " (no scan data for this channel)" << endl;
-                    assert(false);
-                    continue;
-                }
-                minMetric = metric[ch_i];
-                newChannel = ch_i;
-            }
-            cout << endl;
-        }
-        LOG_LOGIC("LCCS: switching to channel " << newChannel);
-        switchChannel(dev, newChannel);
-    }
 };
+
+void LCCSAlgo::Decide(const Scanner* const scanner) {
+    // least congested channel selection
+    // for each possible channel, calculate channel metric: number of APs + number of clients
+    // choose the channel with the lowest metric
+    // if the metric is the same, choose the channel with the lowest number
+
+    auto& knownAps = scanner->GetKnownAps();
+    auto& operatingChannelsList = scanner->GetOperatingChannelsList();
+    auto& channelsToScan = scanner->GetChannelsToScan();
+    auto& dev = scanner->GetDevice();
+    cout << "Running LCCS" << endl;
+    cout << "Gathered scan data:" << endl;
+    for (auto& [bssid, scanData] : knownAps) {
+        cout << "BSSID: " << bssid
+            << ", channel: " << scanData.channel
+            << ", clients: " << scanData.clients.size()
+            << ", SNR: " << scanData.snr
+            << ", RSSI: " << scanData.rssi << endl;
+    }
+    const int NO_DATA_METRIC = 0;
+    std::map<int, int> metric;
+    for (auto& channel : operatingChannelsList) {
+        metric[channel] = NO_DATA_METRIC;
+    }
+    for (auto& [bssid, scanData] : knownAps) {
+        if (metric[scanData.channel] == NO_DATA_METRIC) {
+            metric[scanData.channel] = 0; // start with neutral metric value
+        }
+        metric[scanData.channel]++;
+        metric[scanData.channel] += 10*scanData.clients.size();
+    }
+
+    // find the channel with the lowest metric
+    int minMetric = INT_MAX;
+    int newChannel = 0;
+    for (int ch_i : operatingChannelsList) {
+        cout << "channel " << ch_i << " metric: " << metric[ch_i];
+        if (metric[ch_i] < minMetric) {
+            if (metric[ch_i] == NO_DATA_METRIC &&
+                    std::find(channelsToScan.begin(), channelsToScan.end(),
+                        ch_i) == channelsToScan.end() ) {
+                cout << " (no scan data for this channel)" << endl;
+                assert(false);
+                continue;
+            }
+            minMetric = metric[ch_i];
+            newChannel = ch_i;
+        }
+        cout << endl;
+    }
+    LOG_LOGIC("LCCS: switching to channel " << newChannel);
+    switchChannel(dev, newChannel);
+}
 
 // since no additional parameters can be passed to the callback, we maintain
 // a global map that Scanners can be accessed by the trace context
@@ -317,6 +342,33 @@ map<uint16_t, uint16_t> ofdmFreqToChanNumber = {
     {5785, 157},
     {5805, 161},
     {5825, 165},
+};
+
+class RRMGreedyScanner {
+    std::set<Mac48Address> rrmGroup;
+    // std::vector<Ptr<WifiNetDevice>> devices;
+    NetDeviceContainer devices;
+
+    RRMGreedyScanner(NetDeviceContainer devs) : devices(devs) {
+        for (auto dev = devices.Begin(); dev != devices.End(); dev++) {
+            Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(*dev);
+            Mac48Address bssid = wifiDev->GetMac()->GetAddress();
+            rrmGroup.insert(bssid);
+        }
+    }
+
+    RRMGreedyScanner(NodeContainer nodes) {
+        for (auto node = nodes.Begin(); node != nodes.End(); node++) {
+            Ptr<WifiNetDevice> wifiDev = getWifiNd(*node);
+            devices.Add(wifiDev);
+            Mac48Address bssid = wifiDev->GetMac()->GetAddress();
+            rrmGroup.insert(bssid);
+        }
+    }
+
+    void Scan() {
+
+    }
 };
 
 void monitorSniffer(
@@ -378,10 +430,6 @@ void monitorSniffer(
                         << " on channel " << scanner->getOperatingChannel());
     }
 }
-
-Ptr<WifiNetDevice> getWifiNd (Ptr<Node> node, int idx=0) {
-    return DynamicCast<WifiNetDevice>(node->GetDevice(idx));
-};
 
 
 std::shared_ptr<Scanner>
