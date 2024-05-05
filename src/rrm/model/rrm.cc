@@ -177,9 +177,14 @@ Scanner::GetChannelsToScan() const {
 void
 Scanner::PrintScanResults() {
     cout << endl << "Scan data:" << endl;
-    cout << "BSSID" << "\t\t\t" << "Channel" << "\t" << "SNR" << "\t\t" << "RSSI" << endl;
+    cout << "BSSID" << "\t\t\t" << "Channel" << "\t" << "SNR" << "\t\t" << "RSSI" << "\t" << "Clients" << endl;
     for (auto& [bssid, scanData] : knownAps) {
-        cout << bssid << "\t" << scanData.channel << "\t" << scanData.snr << "\t" << scanData.rssi << endl;
+        cout << bssid << "\t"
+             << scanData.channel << "\t"
+             << scanData.snr << "\t"
+             << scanData.rssi << "\t"
+             << scanData.clients.size()
+             << endl;
     }
 }
 
