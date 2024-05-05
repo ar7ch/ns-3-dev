@@ -42,6 +42,7 @@
 #include "ns3/net-device.h"
 #include <cassert>
 #include <iomanip>
+#include <limits>
 
 using namespace ns3;
 using std::cout, std::endl, std::setw, std::setprecision, std::vector, std::string, std::map, std::set;
@@ -153,6 +154,36 @@ public:
 };
 
 class Scanner {
+private:
+    const double channelDwellTime_s = 0.2;
+    const double scanInterval_s = 1.0;
+    int dataChannel;
+    Ptr<WifiNetDevice> dev;
+    vector<uint16_t> channelsToScan;
+    vector<uint16_t> operatingChannelsList;
+    // bool isScanning = false;
+
+    void scanChannel(std::vector<uint16_t>::iterator nextChanIt) {
+        if (nextChanIt == channelsToScan.end()) {
+            Simulator::ScheduleNow(&LCCSAlgo::Decide, this);
+            return;
+        }
+        uint16_t channel = *nextChanIt;
+        switchChannel(dev, channel);
+        LOG_LOGIC("Scanning channel " << +channel);
+        nextChanIt++;
+        Simulator::Schedule(Seconds(channelDwellTime_s), &Scanner::returnToDataChannel, this, nextChanIt);
+    }
+
+    void returnToDataChannel(std::vector<uint16_t>::iterator nextChanIt) {
+        switchChannel(dev, dataChannel);
+        LOG_LOGIC("Returning to data channel " << +dataChannel);
+        if (nextChanIt != channelsToScan.end() && *nextChanIt == dataChannel) {
+            LOG_LOGIC("Skipping scan for data channel");
+            nextChanIt++;
+        }
+        Simulator::Schedule(Seconds(scanInterval_s), &Scanner::scanChannel, this, nextChanIt);
+    }
 public:
     struct ScanData {
         uint16_t channel = 0;
@@ -166,6 +197,9 @@ public:
         ScanData(uint16_t channel, uint16_t width, double snr, double rssi) :
             channel(channel), width(width), snr(snr), rssi(rssi) {}
     };
+
+    using ScanDataTable = std::map<Mac48Address, ScanData>;
+    ScanDataTable knownAps;
 
     Scanner(Ptr<WifiNetDevice> wifidev,
             vector<uint16_t> opChannelsList) : dev(wifidev),
@@ -210,36 +244,6 @@ public:
 
     uint16_t getOperatingChannel() {
         return dev->GetPhy()->GetChannelNumber();
-    }
-    std::map<Mac48Address, ScanData> knownAps;
-private:
-    double channelDwellTime_s = 0.2;
-    double scanInterval_s = 1.0;
-    int dataChannel;
-    Ptr<WifiNetDevice> dev;
-    vector<uint16_t> channelsToScan;
-    vector<uint16_t> operatingChannelsList;
-
-    void scanChannel(std::vector<uint16_t>::iterator nextChanIt) {
-        if (nextChanIt == channelsToScan.end()) {
-            Simulator::ScheduleNow(&LCCSAlgo::Decide, this);
-            return;
-        }
-        uint16_t channel = *nextChanIt;
-        switchChannel(dev, channel);
-        LOG_LOGIC("Scanning channel " << +channel);
-        nextChanIt++;
-        Simulator::Schedule(Seconds(channelDwellTime_s), &Scanner::returnToDataChannel, this, nextChanIt);
-    }
-
-    void returnToDataChannel(std::vector<uint16_t>::iterator nextChanIt) {
-        switchChannel(dev, dataChannel);
-        LOG_LOGIC("Returning to data channel " << +dataChannel);
-        if (nextChanIt != channelsToScan.end() && *nextChanIt == dataChannel) {
-            LOG_LOGIC("Skipping scan for data channel");
-            nextChanIt++;
-        }
-        Simulator::Schedule(Seconds(scanInterval_s), &Scanner::scanChannel, this, nextChanIt);
     }
 
 };
@@ -344,31 +348,158 @@ map<uint16_t, uint16_t> ofdmFreqToChanNumber = {
     {5825, 165},
 };
 
-class RRMGreedyScanner {
+class RRMGreedyAlgo {
+
+    const double MinSignal = -100;
+    const double MaxSignal = -25;
+
     std::set<Mac48Address> rrmGroup;
-    // std::vector<Ptr<WifiNetDevice>> devices;
-    NetDeviceContainer devices;
+    std::map<Mac48Address, std::shared_ptr<Scanner>> devices;
 
-    RRMGreedyScanner(NetDeviceContainer devs) : devices(devs) {
-        for (auto dev = devices.Begin(); dev != devices.End(); dev++) {
-            Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(*dev);
-            Mac48Address bssid = wifiDev->GetMac()->GetAddress();
+    vector<uint16_t> channelsList;
+    RRMGreedyAlgo(std::vector<std::shared_ptr<Scanner>> devs) {
+        for (auto& dev : devs) {
+            Mac48Address bssid = dev->GetDevice()->GetMac()->GetAddress();
             rrmGroup.insert(bssid);
+            devices[bssid] = dev;
+            channelsList = dev->GetOperatingChannelsList();
+        }
+    }
+    std::map<Mac48Address, Scanner::ScanDataTable> scandata;
+    using ScanData_t = std::map<Mac48Address, Scanner::ScanData>;
+
+    struct IfaceAirData {
+        Scanner::ScanDataTable signals;
+        uint16_t channel = -1;
+        double txDiff = 0.0;
+        uint16_t width = 20;
+    };
+
+    using GroupState = std::map<Mac48Address, IfaceAirData>;
+
+    GroupState PreprocessScanData() {
+        GroupState groupState;
+        for (auto& [bssid, scanData] : scandata) {
+            IfaceAirData ifaceData;
+            auto cpe = devices[bssid];
+            ifaceData.channel = cpe->getOperatingChannel();
+            ifaceData.signals = scanData;
+            groupState[bssid] = ifaceData;
+        }
+        return groupState;
+    }
+
+    void RequestScandata() {
+        for (auto& [bssid, dev] : devices) {
+            dev->Scan();
+            scandata[bssid] = dev->GetKnownAps();
         }
     }
 
-    RRMGreedyScanner(NodeContainer nodes) {
-        for (auto node = nodes.Begin(); node != nodes.End(); node++) {
-            Ptr<WifiNetDevice> wifiDev = getWifiNd(*node);
-            devices.Add(wifiDev);
-            Mac48Address bssid = wifiDev->GetMac()->GetAddress();
-            rrmGroup.insert(bssid);
+    double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20) {
+        // provides a theoretical measure of how much channels overlap,
+        // with no respect to actual RF situation
+        // 0 - no overlap, 1 - full overlap
+        //
+        double interf = 0.0;
+        double diff = std::abs(ch1 - ch2);
+        double add = std::max(ch1, ch2) < 36;
+        if (diff >= ((double)width/5)+ add) {
+            interf = 0.0;
+        } else {
+            interf = 1.0;
+        }
+        return interf;
+    }
+
+    double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState, uint16_t ifaceChannel) {
+        double cumInterf = 0.0;
+        auto iface = devices[bssid];
+
+
+        for (auto& [otherBssid, scandataEntry] : groupState[bssid].signals) {
+            if (otherBssid == bssid) {
+                continue;
+            }
+            uint16_t otherChannel = scandataEntry.channel;
+            double otherTxDiff = 0.0;
+            if (groupState.count(otherBssid)) { // other AP belongs to RRM group
+                otherTxDiff = groupState[otherBssid].txDiff;
+                otherChannel = groupState[otherBssid].channel;
+            }
+            double ciScore = ChannelInterference(
+                ifaceChannel,
+                otherChannel
+            );
+            if (ciScore == 0.0) {
+                continue;
+            }
+            double signal = scandataEntry.rssi + otherTxDiff;
+            signal = std::min(signal, MaxSignal);
+            signal = std::max(signal, MinSignal);
+            signal = (signal - MinSignal) / (MaxSignal - MinSignal);
+            // TODO: is it equivalent to initial RRMGreedy implementation?
+            cumInterf += ciScore * signal;
+        }
+        // double interf = cumInnerInterf + cumOuterInterf;
+        assert (cumInterf > 0.0);
+        return cumInterf;
+    }
+
+
+    double GroupInterference(GroupState& groupState) {
+        double totalInterf = 0.0;
+        for (auto& [bssid, ifaceState] : groupState) {
+            double onIfaceInterf = OnIfaceInterference(bssid, groupState,
+                    ifaceState.channel);
+            totalInterf += onIfaceInterf;
+        }
+        return totalInterf;
+    }
+
+    void updateAPsConfig(GroupState& groupState) {
+        for (auto& [bssid, ifaceState] : groupState) {
+            auto iface = devices[bssid];
+            switchChannelv2(iface->GetDevice(), ifaceState.channel);
         }
     }
 
-    void Scan() {
+    void Decide() {
+        RequestScandata();
+        GroupState groupState = PreprocessScanData();
+        double prevGroupInterf = 0;
+        double groupInterf = GroupInterference(groupState);
+        const double groupInterfEps = 0.001; // TODO elaborate the value
 
+        // channel selection
+        do {
+            /*
+             * for each device in the group, calculate the interference
+             * caused by the group
+             * choose the device with the lowest interference
+             * if the interference is the same,
+             * choose the device with the lowest number
+            */
+            for (auto& [bssid, ifaceState] : groupState) {
+                double ifaceInterf = std::numeric_limits<double>::max();
+                uint16_t minInterfChannel = ifaceState.channel;
+                for (auto ch_i : channelsList) {
+                    double interf = OnIfaceInterference(bssid, groupState, ch_i);
+                    if (interf < ifaceInterf) {
+                        ifaceInterf = interf;
+                        minInterfChannel = ch_i;
+                    }
+
+                }
+                ifaceState.channel = minInterfChannel;
+            }
+            // switch channel for the device with the lowest interference
+            // and update the scan data
+            prevGroupInterf = groupInterf;
+            groupInterf = GroupInterference(groupState);
+        } while ((groupInterf - prevGroupInterf) > groupInterfEps);
     }
+
 };
 
 void monitorSniffer(
