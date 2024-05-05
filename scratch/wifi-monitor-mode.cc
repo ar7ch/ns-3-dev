@@ -40,9 +40,9 @@
 #include "ns3/packet-sink-helper.h"
 #include "ns3/packet-sink.h"
 #include "ns3/net-device.h"
+#include "ns3/rrm.h"
 #include <cassert>
 #include <iomanip>
-#include <limits>
 
 using namespace ns3;
 using std::cout, std::endl, std::setw, std::setprecision, std::vector, std::string, std::map, std::set;
@@ -56,535 +56,8 @@ static bool g_verbose = false;
 static bool g_debug = false;
 static bool g_logic = false;
 
-/**
- * Move a node position by 5m on the x axis every second, up to 210m.
- *
- * \param node The node.
- */
-// static void
-// AdvancePosition(Ptr<Node> node)
-// {
-//     Ptr<MobilityModel> mobility = node->GetObject<MobilityModel>();
-//     Vector pos = mobility->GetPosition();
-//     pos.x += 5.0;
-//     if (pos.x >= 210.0)
-//     {
-//         return;
-//     }
-//     mobility->SetPosition(pos);
-//
-//     Simulator::Schedule(Seconds(1.0), &AdvancePosition, node);
-// }
-
-
-string assembleChannelSettings(uint16_t channel, uint16_t width, string band) {
-    assert(band == "BAND_2_4GHZ" || band == "BAND_5GHZ");
-    std::stringstream ss;
-    ss << "{"
-        << std::to_string(channel) << ", "
-        << std::to_string(width) << ", "
-        << band
-        << ", " << "0" << "}";
-    return ss.str();
-}
-
-void switchChannelv2(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel, WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20) {
-    Ptr<WifiPhy> phy = dev->GetPhy();
-    if (phy->IsStateSleep())
-    {
-        phy->ResumeFromSleep();
-    }
-    if (phy->IsStateSwitching()){
-        NS_LOG_DEBUG(Simulator::Now().GetSeconds() << "s: AP channel switch is in progress, postpone the switch");
-        Simulator::Schedule(Seconds(0.1), &switchChannelv2, dev, newOperatingChannel, band, width);
-    }
-
-
-    WifiPhyOperatingChannel channelToSwitch = WifiPhyOperatingChannel(WifiPhyOperatingChannel::FindFirst(
-                    newOperatingChannel,
-                    0,
-                    20,
-                    phy->GetStandard(),
-                    band
-                    )
-                );
-    NS_LOG_DEBUG(Simulator::Now().GetSeconds() <<
-            "s: switch AP channel: " << +phy->GetOperatingChannel().GetNumber() <<
-            "->" << +channelToSwitch.GetNumber());
-    WifiPhy::ChannelTuple chTuple{channelToSwitch.GetNumber(),
-        channelToSwitch.GetWidth(),
-        channelToSwitch.GetPhyBand(),
-        channelToSwitch.GetPrimaryChannelIndex(20)};
-    phy->SetOperatingChannel(chTuple);
-}
-
-void switchChannel(Ptr<WifiNetDevice> dev, uint16_t operatingChannel, WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20) {
-    string bandStr;
-    switch(band) {
-        case WIFI_PHY_BAND_2_4GHZ:
-            assert(operatingChannel >= 1 && operatingChannel <= 14);
-            bandStr = "BAND_2_4GHZ";
-            break;
-        case WIFI_PHY_BAND_5GHZ:
-            assert(operatingChannel >= 36 && operatingChannel <= 165);
-            bandStr = "BAND_5GHZ";
-            break;
-        default:
-            assert(false);
-    }
-    Ptr<WifiPhy> phy = dev->GetPhy();
-    phy->SetAttribute("ChannelSettings", StringValue(
-        assembleChannelSettings(operatingChannel, width, bandStr))
-    );
-    // assert(phy->GetOperatingChannel().GetNumber() == operatingChannel);
-}
-
-Ptr<WifiNetDevice> getWifiNd (Ptr<Node> node, int idx=0) {
-    return DynamicCast<WifiNetDevice>(node->GetDevice(idx));
-};
-
-class Scanner;
-
-class LCCSAlgo {
-public:
-    LCCSAlgo() = delete;
-
-    static void Decide(const Scanner* const scanner);
-
-};
-
-class Scanner {
-private:
-    const double channelDwellTime_s = 0.2;
-    const double scanInterval_s = 1.0;
-    int dataChannel;
-    Ptr<WifiNetDevice> dev;
-    vector<uint16_t> channelsToScan;
-    vector<uint16_t> operatingChannelsList;
-    // bool isScanning = false;
-
-    void scanChannel(std::vector<uint16_t>::iterator nextChanIt) {
-        if (nextChanIt == channelsToScan.end()) {
-            Simulator::ScheduleNow(&LCCSAlgo::Decide, this);
-            return;
-        }
-        uint16_t channel = *nextChanIt;
-        switchChannel(dev, channel);
-        LOG_LOGIC("Scanning channel " << +channel);
-        nextChanIt++;
-        Simulator::Schedule(Seconds(channelDwellTime_s), &Scanner::returnToDataChannel, this, nextChanIt);
-    }
-
-    void returnToDataChannel(std::vector<uint16_t>::iterator nextChanIt) {
-        switchChannel(dev, dataChannel);
-        LOG_LOGIC("Returning to data channel " << +dataChannel);
-        if (nextChanIt != channelsToScan.end() && *nextChanIt == dataChannel) {
-            LOG_LOGIC("Skipping scan for data channel");
-            nextChanIt++;
-        }
-        Simulator::Schedule(Seconds(scanInterval_s), &Scanner::scanChannel, this, nextChanIt);
-    }
-public:
-    struct ScanData {
-        uint16_t channel = 0;
-        uint16_t width = 0;
-        double snr = 0.0;
-        double rssi = 0.0;
-        set<Mac48Address> clients;
-
-        ScanData() {}
-
-        ScanData(uint16_t channel, uint16_t width, double snr, double rssi) :
-            channel(channel), width(width), snr(snr), rssi(rssi) {}
-    };
-
-    using ScanDataTable = std::map<Mac48Address, ScanData>;
-    ScanDataTable knownAps;
-
-    Scanner(Ptr<WifiNetDevice> wifidev,
-            vector<uint16_t> opChannelsList) : dev(wifidev),
-                                                channelsToScan(opChannelsList),
-                                                operatingChannelsList(opChannelsList) {}
-    ~Scanner() {}
-
-    void Scan() {
-        Ptr<WifiPhy> phy = dev->GetPhy();
-        dataChannel = phy->GetChannelNumber();
-        Simulator::ScheduleNow(&Scanner::scanChannel, this, channelsToScan.begin());
-    }
-
-    const Ptr<WifiNetDevice> GetDevice() const {
-        return dev;
-    }
-
-    const map<Mac48Address, ScanData>& GetKnownAps() const {
-        return knownAps;
-    }
-
-    const vector<uint16_t>& GetOperatingChannelsList() const {
-        return operatingChannelsList;
-    }
-
-    const vector<uint16_t>& GetChannelsToScan() const {
-        return channelsToScan;
-    }
-
-    void PrintScanResults() {
-        cout << endl << "Scan data:" << endl;
-        cout << "BSSID" << "\t\t\t" << "Channel" << "\t" << "SNR" << "\t\t" << "RSSI" << endl;
-        for (auto& [bssid, scanData] : knownAps) {
-            cout << bssid << "\t" << scanData.channel << "\t" << scanData.snr << "\t" << scanData.rssi << endl;
-        }
-    }
-
-    // void addAp(uint16_t channel, Mac48Address bssid) {
-    //     knownAps.insert(bssid);
-    //     apMap[channel].insert(bssid);
-    // }
-
-    uint16_t getOperatingChannel() {
-        return dev->GetPhy()->GetChannelNumber();
-    }
-
-};
-
-void LCCSAlgo::Decide(const Scanner* const scanner) {
-    // least congested channel selection
-    // for each possible channel, calculate channel metric: number of APs + number of clients
-    // choose the channel with the lowest metric
-    // if the metric is the same, choose the channel with the lowest number
-
-    auto& knownAps = scanner->GetKnownAps();
-    auto& operatingChannelsList = scanner->GetOperatingChannelsList();
-    auto& channelsToScan = scanner->GetChannelsToScan();
-    auto& dev = scanner->GetDevice();
-    cout << "Running LCCS" << endl;
-    cout << "Gathered scan data:" << endl;
-    for (auto& [bssid, scanData] : knownAps) {
-        cout << "BSSID: " << bssid
-            << ", channel: " << scanData.channel
-            << ", clients: " << scanData.clients.size()
-            << ", SNR: " << scanData.snr
-            << ", RSSI: " << scanData.rssi << endl;
-    }
-    const int NO_DATA_METRIC = 0;
-    std::map<int, int> metric;
-    for (auto& channel : operatingChannelsList) {
-        metric[channel] = NO_DATA_METRIC;
-    }
-    for (auto& [bssid, scanData] : knownAps) {
-        if (metric[scanData.channel] == NO_DATA_METRIC) {
-            metric[scanData.channel] = 0; // start with neutral metric value
-        }
-        metric[scanData.channel]++;
-        metric[scanData.channel] += 10*scanData.clients.size();
-    }
-
-    // find the channel with the lowest metric
-    int minMetric = INT_MAX;
-    int newChannel = 0;
-    for (int ch_i : operatingChannelsList) {
-        cout << "channel " << ch_i << " metric: " << metric[ch_i];
-        if (metric[ch_i] < minMetric) {
-            if (metric[ch_i] == NO_DATA_METRIC &&
-                    std::find(channelsToScan.begin(), channelsToScan.end(),
-                        ch_i) == channelsToScan.end() ) {
-                cout << " (no scan data for this channel)" << endl;
-                assert(false);
-                continue;
-            }
-            minMetric = metric[ch_i];
-            newChannel = ch_i;
-        }
-        cout << endl;
-    }
-    LOG_LOGIC("LCCS: switching to channel " << newChannel);
-    switchChannel(dev, newChannel);
-}
-
-// since no additional parameters can be passed to the callback, we maintain
-// a global map that Scanners can be accessed by the trace context
-// (that contains info about device and corresponding scanner)
-static map<string, std::shared_ptr<Scanner>> scannerByTraceContext;
-
-map<uint16_t, uint16_t> ofdmFreqToChanNumber = {
-    {2412, 1},
-    {2417, 2},
-    {2422, 3},
-    {2427, 4},
-    {2432, 5},
-    {2437, 6},
-    {2442, 7},
-    {2447, 8},
-    {2452, 9},
-    {2457, 10},
-    {2462, 11},
-    {2467, 12},
-    {2472, 13},
-    {2484, 14},
-    {5180, 36},
-    {5200, 40},
-    {5220, 44},
-    {5240, 48},
-    {5260, 52},
-    {5280, 56},
-    {5300, 60},
-    {5320, 64},
-    {5500, 100},
-    {5520, 104},
-    {5540, 108},
-    {5560, 112},
-    {5580, 116},
-    {5600, 120},
-    {5620, 124},
-    {5640, 128},
-    {5660, 132},
-    {5680, 136},
-    {5700, 140},
-    {5745, 149},
-    {5765, 153},
-    {5785, 157},
-    {5805, 161},
-    {5825, 165},
-};
-
-class RRMGreedyAlgo {
-
-    const double MinSignal = -100;
-    const double MaxSignal = -25;
-
-    std::set<Mac48Address> rrmGroup;
-    std::map<Mac48Address, std::shared_ptr<Scanner>> devices;
-
-    vector<uint16_t> channelsList;
-    RRMGreedyAlgo(std::vector<std::shared_ptr<Scanner>> devs) {
-        for (auto& dev : devs) {
-            Mac48Address bssid = dev->GetDevice()->GetMac()->GetAddress();
-            rrmGroup.insert(bssid);
-            devices[bssid] = dev;
-            channelsList = dev->GetOperatingChannelsList();
-        }
-    }
-    std::map<Mac48Address, Scanner::ScanDataTable> scandata;
-    using ScanData_t = std::map<Mac48Address, Scanner::ScanData>;
-
-    struct IfaceAirData {
-        Scanner::ScanDataTable signals;
-        uint16_t channel = -1;
-        double txDiff = 0.0;
-        uint16_t width = 20;
-    };
-
-    using GroupState = std::map<Mac48Address, IfaceAirData>;
-
-    GroupState PreprocessScanData() {
-        GroupState groupState;
-        for (auto& [bssid, scanData] : scandata) {
-            IfaceAirData ifaceData;
-            auto cpe = devices[bssid];
-            ifaceData.channel = cpe->getOperatingChannel();
-            ifaceData.signals = scanData;
-            groupState[bssid] = ifaceData;
-        }
-        return groupState;
-    }
-
-    void RequestScandata() {
-        for (auto& [bssid, dev] : devices) {
-            dev->Scan();
-            scandata[bssid] = dev->GetKnownAps();
-        }
-    }
-
-    double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20) {
-        // provides a theoretical measure of how much channels overlap,
-        // with no respect to actual RF situation
-        // 0 - no overlap, 1 - full overlap
-        //
-        double interf = 0.0;
-        double diff = std::abs(ch1 - ch2);
-        double add = std::max(ch1, ch2) < 36;
-        if (diff >= ((double)width/5)+ add) {
-            interf = 0.0;
-        } else {
-            interf = 1.0;
-        }
-        return interf;
-    }
-
-    double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState, uint16_t ifaceChannel) {
-        double cumInterf = 0.0;
-        auto iface = devices[bssid];
-
-
-        for (auto& [otherBssid, scandataEntry] : groupState[bssid].signals) {
-            if (otherBssid == bssid) {
-                continue;
-            }
-            uint16_t otherChannel = scandataEntry.channel;
-            double otherTxDiff = 0.0;
-            if (groupState.count(otherBssid)) { // other AP belongs to RRM group
-                otherTxDiff = groupState[otherBssid].txDiff;
-                otherChannel = groupState[otherBssid].channel;
-            }
-            double ciScore = ChannelInterference(
-                ifaceChannel,
-                otherChannel
-            );
-            if (ciScore == 0.0) {
-                continue;
-            }
-            double signal = scandataEntry.rssi + otherTxDiff;
-            signal = std::min(signal, MaxSignal);
-            signal = std::max(signal, MinSignal);
-            signal = (signal - MinSignal) / (MaxSignal - MinSignal);
-            // TODO: is it equivalent to initial RRMGreedy implementation?
-            cumInterf += ciScore * signal;
-        }
-        // double interf = cumInnerInterf + cumOuterInterf;
-        assert (cumInterf > 0.0);
-        return cumInterf;
-    }
-
-
-    double GroupInterference(GroupState& groupState) {
-        double totalInterf = 0.0;
-        for (auto& [bssid, ifaceState] : groupState) {
-            double onIfaceInterf = OnIfaceInterference(bssid, groupState,
-                    ifaceState.channel);
-            totalInterf += onIfaceInterf;
-        }
-        return totalInterf;
-    }
-
-    void updateAPsConfig(GroupState& groupState) {
-        for (auto& [bssid, ifaceState] : groupState) {
-            auto iface = devices[bssid];
-            switchChannelv2(iface->GetDevice(), ifaceState.channel);
-        }
-    }
-
-    void Decide() {
-        RequestScandata();
-        GroupState groupState = PreprocessScanData();
-        double prevGroupInterf = 0;
-        double groupInterf = GroupInterference(groupState);
-        const double groupInterfEps = 0.001; // TODO elaborate the value
-
-        // channel selection
-        do {
-            /*
-             * for each device in the group, calculate the interference
-             * caused by the group
-             * choose the device with the lowest interference
-             * if the interference is the same,
-             * choose the device with the lowest number
-            */
-            for (auto& [bssid, ifaceState] : groupState) {
-                double ifaceInterf = std::numeric_limits<double>::max();
-                uint16_t minInterfChannel = ifaceState.channel;
-                for (auto ch_i : channelsList) {
-                    double interf = OnIfaceInterference(bssid, groupState, ch_i);
-                    if (interf < ifaceInterf) {
-                        ifaceInterf = interf;
-                        minInterfChannel = ch_i;
-                    }
-
-                }
-                ifaceState.channel = minInterfChannel;
-            }
-            // switch channel for the device with the lowest interference
-            // and update the scan data
-            prevGroupInterf = groupInterf;
-            groupInterf = GroupInterference(groupState);
-        } while ((groupInterf - prevGroupInterf) > groupInterfEps);
-    }
-
-};
-
-void monitorSniffer(
-        std::string context, Ptr<const Packet> p,
-        uint16_t channelFreqMhz,
-        WifiTxVector txVector,
-        MpduInfo aMpdu,
-        SignalNoiseDbm signalNoise,
-        uint16_t staId) {
-
-    Ptr<Packet> packet = p->Copy();
-
-    WifiMacHeader hdr;
-    packet->RemoveHeader(hdr);
-    if (g_verbose || g_debug) {
-        cout << setw(7) << std::fixed << std::setprecision(5) << Simulator::Now().GetSeconds() << "s: ";
-        hdr.Print(cout);
-        cout << endl;
-        if (hdr.IsQosData()) {
-            cout << "QoS data! "
-                << "RA: " << hdr.GetAddr1()
-                << " TA: " << hdr.GetAddr2()
-                << " DA: " << hdr.GetAddr3()
-                << " SA: " << hdr.GetAddr4()
-                << " FromDS: " << hdr.IsFromDs()
-                << " ToDS: " << hdr.IsToDs()
-                << " Retry: " << hdr.IsRetry()
-                << endl;
-        }
-    }
-    std::shared_ptr<Scanner> scanner = scannerByTraceContext[context];
-
-    if (hdr.IsBeacon() || (hdr.IsData() && hdr.IsFromDs())) { // access point
-        uint16_t channel = scanner->getOperatingChannel();
-        // check consistency of channel usage
-        assert(ofdmFreqToChanNumber.find(channelFreqMhz) != ofdmFreqToChanNumber.end());
-        assert(channel == ofdmFreqToChanNumber[channelFreqMhz]);
-
-        double snr = signalNoise.signal / signalNoise.noise;
-        Mac48Address bssid = hdr.GetAddr2();
-
-        if (scanner->knownAps.count(bssid)) {
-            scanner->knownAps[bssid].snr = snr;
-            scanner->knownAps[bssid].rssi = signalNoise.signal;
-        } else {
-            Scanner::ScanData scanData{channel, 20, snr, signalNoise.signal};
-            scanner->knownAps[bssid] = scanData;
-        }
-        NS_LOG_DEBUG("Beacon from " << bssid << " on channel " << channel);
-    } else if (hdr.IsData() && hdr.IsToDs()) { // client
-        Mac48Address bssid = hdr.GetAddr1();
-        Mac48Address client = hdr.GetAddr2();
-
-        if (scanner->knownAps.count(bssid)) {
-            scanner->knownAps[bssid].clients.insert(client);
-        }
-        NS_LOG_DEBUG("Data from " << client
-                        << " to " << bssid
-                        << " on channel " << scanner->getOperatingChannel());
-    }
-}
-
-
 std::shared_ptr<Scanner>
-CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChannels) {
-
-    Ptr<WifiNetDevice> scannerWifiNetDev = getWifiNd(scannerWifiNode);
-    std::stringstream ss;
-    ss << "/NodeList/" << scannerWifiNode->GetId()
-        << "/DeviceList/" << scannerWifiNetDev->GetIfIndex()
-        << "/$ns3::WifiNetDevice/Phy/MonitorSnifferRx";
-    string scanApTraceStr = ss.str();
-    std::shared_ptr<Scanner> scanner = std::make_shared<Scanner>(scannerWifiNetDev, operatingChannels);
-    scannerByTraceContext[scanApTraceStr] = scanner;
-    Config::Connect(scanApTraceStr, MakeCallback(&monitorSniffer));
-    return scanner;
-}
-
-int main(int argc, char* argv[]) {
-    CommandLine cmd(__FILE__);
-    cmd.AddValue("verbose", "Print trace information if true", g_verbose);
-    cmd.AddValue("debug", "Print debug information if true", g_debug);
-    cmd.AddValue("logic", "Enable info debug level", g_logic);
-    cmd.Parse(argc, argv);
-
+doScanning(int scanningApIdx) {
     Packet::EnablePrinting();
     // LogComponentEnable("WifiPhy", LOG_LEVEL_DEBUG);
     // if
@@ -595,26 +68,33 @@ int main(int argc, char* argv[]) {
         LogComponentEnable("StaWifiMac", LogLevel(LOG_LEVEL_LOGIC & (~LOG_FUNCTION)));
     }
     LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_LOGIC);
+    LogComponentEnable("rrm", LOG_LEVEL_LOGIC);
     // LogComponentEnable("WifiDefaultAssocManager", LOG_LEVEL_LO);
 
     WifiHelper wifi;
     MobilityHelper mobility;
-    NodeContainer stas;
-    NodeContainer ap;
-    NodeContainer scanAp;
+    NodeContainer staNodes;
+    NodeContainer apNodes;
+    // NodeContainer scanAp;
 
     NetDeviceContainer staDevs;
     NetDeviceContainer apDevs;
     PacketSocketHelper packetSocket;
 
-    stas.Create(2);
-    ap.Create(2);
-    scanAp.Create(1);
+    const int n_stas = 2;
+    const int n_aps = 3;
+    const uint16_t initialChannel = 1;
+    const uint16_t initialWidth = 20;
+    const WifiPhyBand initialBand = WIFI_PHY_BAND_2_4GHZ;
+
+    staNodes.Create(n_stas);
+    apNodes.Create(n_aps);
+    // scanAp.Create(1);
 
     // give packet socket powers to nodes.
-    packetSocket.Install(stas);
-    packetSocket.Install(ap);
-    packetSocket.Install(scanAp);
+    packetSocket.Install(staNodes);
+    packetSocket.Install(apNodes);
+    // packetSocket.Install(scanAp);
 
     // setup wifi
     wifi.SetStandard(WIFI_STANDARD_80211n);
@@ -627,10 +107,11 @@ int main(int argc, char* argv[]) {
     wifiPhy.SetChannel(wifiChannel.Create());
     // initial channel settings
     TupleValue<UintegerValue, UintegerValue, EnumValue<WifiPhyBand>, UintegerValue> channelValue;
-    channelValue.Set(WifiPhy::ChannelTuple {1, 20, WIFI_PHY_BAND_2_4GHZ, 0});
+    channelValue.Set(WifiPhy::ChannelTuple {initialChannel, initialWidth, initialBand, 0});
     wifiPhy.Set("ChannelSettings", channelValue);
 
     Ssid ssid = Ssid("wifi-default");
+
     auto setupSta = [&]() {
         wifiMac.SetType("ns3::StaWifiMac",
                         "ActiveProbing",
@@ -640,7 +121,7 @@ int main(int argc, char* argv[]) {
                         "QosSupported",
                         BooleanValue(false)
         );
-        staDevs = wifi.Install(wifiPhy, wifiMac, stas);
+        staDevs = wifi.Install(wifiPhy, wifiMac, staNodes);
     };
     // setup stas.
     setupSta();
@@ -651,7 +132,7 @@ int main(int argc, char* argv[]) {
             "QosSupported",
             BooleanValue(false)
             );
-    apDevs.Add(wifi.Install(wifiPhy, wifiMac, ap.Get(0)));
+    apDevs.Add(wifi.Install(wifiPhy, wifiMac, apNodes.Get(0)));
 
     wifiMac.SetType("ns3::ApWifiMac",
             "Ssid",
@@ -659,33 +140,29 @@ int main(int argc, char* argv[]) {
             "QosSupported",
             BooleanValue(false)
             );
-    apDevs.Add(wifi.Install(wifiPhy, wifiMac, ap.Get(1)));
+    apDevs.Add(wifi.Install(wifiPhy, wifiMac, apNodes.Get(1)));
 
     // setup scanning ap
     wifiMac.SetType("ns3::ApWifiMac",
-            "Ssid", SsidValue(Ssid("scan-ap-ssid")),
+            "Ssid", SsidValue(Ssid("ssid-3")),
             "BeaconGeneration", BooleanValue(true)
     );
-    wifi.Install(wifiPhy, wifiMac, scanAp);
+    wifi.Install(wifiPhy, wifiMac, apNodes.Get(2));
 
     // mobility.
-    mobility.Install(stas);
-    mobility.Install(ap);
-    mobility.Install(scanAp);
+    mobility.Install(staNodes);
+    mobility.Install(apNodes);
 
     // Simulator::Schedule(Seconds(1.0), &AdvancePosition, ap.Get(0));
 
     // -------------------
 
     //
-    Ptr<WifiNetDevice> scanApNetDev = getWifiNd(scanAp.Get(0));
-    Ptr<WifiNetDevice> apNetDev = getWifiNd(ap.Get(0));
-    Ptr<WifiNetDevice> ap2NetDev = getWifiNd(ap.Get(1));
-    switchChannel(ap2NetDev, 1);
+    switchChannel(getWifiNd(apNodes.Get(1)), 11);
 
     InternetStackHelper stack;
-    stack.Install(stas);
-    stack.Install(ap);
+    stack.Install(staNodes);
+    stack.Install(apNodes);
 
     Ipv4AddressHelper address;
     address.SetBase("1.1.1.0", "255.255.255.0");
@@ -695,7 +172,7 @@ int main(int argc, char* argv[]) {
 
     constexpr uint16_t echoPort = 9;
     UdpEchoServerHelper echoServer(echoPort);
-    ApplicationContainer serverApps = echoServer.Install(stas.Get(0));
+    ApplicationContainer serverApps = echoServer.Install(staNodes.Get(0));
 
     UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
     double maxPackets = 0; // 0 means unlimited
@@ -705,7 +182,7 @@ int main(int argc, char* argv[]) {
     echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
     echoClient.SetAttribute("PacketSize", UintegerValue(1024));
     NS_LOG_LOGIC("Packets rate: " << ((packetSize / packetInterval) / 1024) * 8 << " kbps");
-    ApplicationContainer clientApps = echoClient.Install(stas.Get(1));
+    ApplicationContainer clientApps = echoClient.Install(staNodes.Get(1));
 
     /* Populate routing table */
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
@@ -721,24 +198,63 @@ int main(int argc, char* argv[]) {
     // simulation
 
     Simulator::Stop(Seconds(onOffStopTime));
+    // cout << "AP1 bssid: " << apNodes.Get(0)->GetDevice(0)->GetAddress() << endl;
+    // cout << "AP2 bssid: " << apNodes.Get(1)->GetDevice(0)->GetAddress() << endl;
+    // cout << "AP 3 bssid: " << apNodes.Get(2)->GetDevice(0)->GetAddress() << endl;
+    // cout << "STA1 mac: " << staNodes.Get(0)->GetDevice(0)->GetAddress() << endl;
+    // cout << "STA2 mac: " << staNodes.Get(1)->GetDevice(0)->GetAddress() << endl;
 
-    cout << "AP1 bssid: " << ap.Get(0)->GetDevice(0)->GetAddress() << endl;
-    cout << "AP2 bssid: " << ap.Get(1)->GetDevice(0)->GetAddress() << endl;
-    cout << "STA1 mac: " << stas.Get(0)->GetDevice(0)->GetAddress() << endl;
-    cout << "STA2 mac: " << stas.Get(1)->GetDevice(0)->GetAddress() << endl;
-    cout << "scanning ap bssid: " << scanAp.Get(0)->GetDevice(0)->GetAddress() << endl;
+    for (auto it = apNodes.Begin(); it != apNodes.End(); ++it) {
+        int i = it - apNodes.Begin();
+        SIM_LOG_LOGIC("AP " << i
+             << ",channel: " << +getWifiNd(*it)->GetPhy()->GetOperatingChannel().GetNumber()
+             << ",ssid: " << getWifiNd(*it)->GetMac()->GetSsid().PeekString()
+             << ",bssid: " << (*it)->GetDevice(0)->GetAddress()
+        );
+    }
 
-    Ptr<Node> scannerWifiNode= ap.Get(0);
+    for (auto it = staNodes.Begin(); it != staNodes.End(); ++it) {
+        int i = it - staNodes.Begin();
+        SIM_LOG_LOGIC("STA " << i
+             << ",ssid: " << getWifiNd(*it)->GetMac()->GetSsid().PeekString()
+             << ",channel: " << +getWifiNd(*it)->GetPhy()->GetOperatingChannel().GetNumber()
+             << ",mac: " << (*it)->GetDevice(0)->GetAddress()
+        );
+    }
+
+    Ptr<Node> scannerWifiNode = apNodes.Get(scanningApIdx);
     vector<uint16_t> operatingChannels{1, 6, 11};
     auto scanner = CreateScannerForNode(scannerWifiNode, operatingChannels);
 
-    switchChannel(scanApNetDev, 11);
+    switchChannel(getWifiNd(apNodes.Get(2)), 1);
 
     Simulator::Schedule(Seconds(2.5), &Scanner::Scan, &(*scanner));
     Simulator::Run();
+    scanner->PrintScanResults();
+    return scanner;
+}
+
+int main(int argc, char* argv[]) {
+    CommandLine cmd(__FILE__);
+    cmd.AddValue("verbose", "Print trace information if true", g_verbose);
+    cmd.AddValue("debug", "Print debug information if true", g_debug);
+    cmd.AddValue("logic", "Enable info debug level", g_logic);
+    cmd.Parse(argc, argv);
+
+    auto scanner = doScanning(0);
+    assert(!scanner->knownAps.empty());
+    assert(scanner->getOperatingChannel() == 6);
     Simulator::Destroy();
 
-    scanner->PrintScanResults();
+    scanner = doScanning(1);
+    assert(!scanner->knownAps.empty());
+    assert(scanner->getOperatingChannel() == 6);
+    Simulator::Destroy();
+
+    scanner = doScanning(2);
+    assert(!scanner->knownAps.empty());
+    assert(scanner->getOperatingChannel() == 6);
+    Simulator::Destroy();
     return 0;
 }
 
