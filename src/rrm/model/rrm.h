@@ -4,19 +4,41 @@
 #include "ns3/core-module.h"
 #include "ns3/node.h"
 #include "ns3/wifi-net-device.h"
+#include "ns3/wifi-mac.h"
+#include <iostream>
+#include <functional>
+#include <tuple>
 #include <iomanip>
 
-#define SIM_LOG_LOGIC(x) do { NS_LOG_LOGIC(std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
-#define SIM_LOG_DEBUG(x) do { NS_LOG_DEBUG(std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
+#define SIM_LOG_LOGIC(x) do { NS_LOG_LOGIC(std::fixed << std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
+#define SIM_LOG_DEBUG(x) do { NS_LOG_DEBUG(std::fixed << std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
+
 
 
 namespace ns3 {
 using std::vector, std::map, std::set, std::cout, std::endl, std::string;
 
+class ICallbackHolder {
+public:
+    virtual ~ICallbackHolder() = default;
+    virtual void invoke() = 0;
+};
 
-// inline Ptr<WifiNetDevice> getWifiNd (Ptr<Node> node, int idx=0) {
-//     return DynamicCast<WifiNetDevice>(node->GetDevice(idx));
-// };
+template<typename ReturnType, typename... Args>
+class CallbackHolder : public ICallbackHolder {
+private:
+    std::function<ReturnType(Args...)> callback_;
+    std::tuple<Args...> args_;
+
+public:
+    CallbackHolder(std::function<ReturnType(Args...)> callback, Args... args)
+    : callback_(std::move(callback)), args_(std::make_tuple(std::forward<Args>(args)...)) {}
+
+    void invoke() override {
+        std::apply(callback_, args_);
+    }
+};
+
 
 Ptr<WifiNetDevice> getWifiNd (Ptr<Node> node, int idx=0);
 
@@ -40,11 +62,21 @@ private:
     Ptr<WifiNetDevice> dev;
     vector<uint16_t> channelsToScan;
     vector<uint16_t> operatingChannelsList;
-    // bool isScanning = false;
 
     void scanChannel(std::vector<uint16_t>::iterator nextChanIt);
+    void endScan();
     void returnToDataChannel(std::vector<uint16_t>::iterator nextChanIt);
+    std::unique_ptr<ICallbackHolder> afterScanCallback_ = nullptr;
+
 public:
+    enum class ScanState {
+        AP_MODE_NO_SCANDATA,            // No scan yet performed
+        SCAN_IN_PROGRESS_MON_MODE,
+        SCAN_IN_PROCESSS_AP_MODE,
+        AP_MODE_SCAN_COMPLETE,
+    };
+    ScanState state = ScanState::AP_MODE_NO_SCANDATA;
+
     struct ScanData {
         uint16_t channel = 0;
         uint16_t width = 0;
@@ -60,14 +92,52 @@ public:
 
     using ScanDataTable = std::map<Mac48Address, ScanData>;
     ScanDataTable knownAps;
+    double scanDataTimestamp = 0.0;
+    std::string id_;
 
+    Scanner(Ptr<WifiNetDevice> wifidev, vector<uint16_t> opChannelsList, std::string id="") :
+        dev(wifidev),
+        channelsToScan(opChannelsList),
+        operatingChannelsList(opChannelsList),
+        id_(id)
+    {
+        auto defaultCallback = [this]() {
+            this->PrintScanResults();
+        };
+        afterScanCallback_ = std::make_unique<CallbackHolder<void>>(
+                defaultCallback);
+    }
+
+    template<typename ReturnType, typename... Args>
     Scanner(Ptr<WifiNetDevice> wifidev,
-            vector<uint16_t> opChannelsList) : dev(wifidev),
-                                                channelsToScan(opChannelsList),
-                                                operatingChannelsList(opChannelsList) {}
+            vector<uint16_t> opChannelsList,
+            std::function<ReturnType(Args...)> callback,
+            Args... args) : dev(wifidev),
+                            channelsToScan(opChannelsList),
+                            operatingChannelsList(opChannelsList)
+    {
+        afterScanCallback_ =
+            std::make_unique<CallbackHolder<ReturnType, Args...>>(
+                    callback, args...);
+    }
     ~Scanner() {}
 
     void Scan();
+
+    bool inMonitorMode() const {
+        return state == ScanState::SCAN_IN_PROGRESS_MON_MODE;
+    }
+
+    bool hasScanData() const {
+        return state == ScanState::AP_MODE_SCAN_COMPLETE;
+    }
+
+    template<typename ReturnType, typename... Args>
+    void setAfterScanCallback(std::function<ReturnType(Args...)> callback,
+            Args... args) {
+        afterScanCallback_ = std::make_unique<CallbackHolder<ReturnType, Args...>>(
+                callback, args...);
+    }
 
     const Ptr<WifiNetDevice> GetDevice() const;
 
@@ -82,13 +152,81 @@ public:
 };
 
 std::shared_ptr<Scanner>
-CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChannels);
+CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChannels, std::string id="");
 
 
 class LCCSAlgo {
 public:
     LCCSAlgo() = delete;
     static void Decide(const Scanner* const scanner);
+};
+
+class RRMGreedyAlgo {
+
+    const double MinSignal = -100;
+    const double MaxSignal = -25;
+    const double scandataStaleTime_s = 5.0;
+
+    std::vector<uint16_t> channelsList; // assumed to be the same in the group
+
+    std::set<Mac48Address> rrmGroup;
+    std::map<Mac48Address, std::shared_ptr<Scanner>> devices;
+
+    std::map<Mac48Address, Scanner::ScanDataTable> scandata;
+    std::map<Mac48Address, double> scandataTimestamp;
+    using ScanData_t = std::map<Mac48Address, Scanner::ScanData>;
+
+    struct IfaceAirData {
+        Scanner::ScanDataTable signals;
+        uint16_t channel = -1;
+        double txDiff = 0.0;
+        uint16_t width = 20;
+    };
+
+    using GroupState = std::map<Mac48Address, IfaceAirData>;
+
+    GroupState PreprocessScanData();
+
+    void RequestScandata();
+
+    double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20);
+
+    double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState, uint16_t ifaceChannel);
+
+    double GroupInterference(GroupState& groupState);
+
+    void updateAPsConfig(GroupState& groupState);
+
+    bool isScanDataStale(const Mac48Address& bssid) const {
+        return isScanDataStale(scandataTimestamp.at(bssid));
+    }
+
+    bool isScanDataStale(double scandataTimestamp) const {
+        return (Simulator::Now().GetSeconds() - scandataTimestamp) > scandataStaleTime_s;
+    }
+    void PrintGroupState(GroupState& groupState);
+
+    public:
+
+    void Decide();
+
+    void AddApScandata(const Scanner *scanner);
+    static void AddApScandata_s(RRMGreedyAlgo *rrmgreedy, Scanner *scanner);
+
+    void AddDevice(std::shared_ptr<Scanner> dev) {
+        Mac48Address bssid = dev->GetDevice()->GetMac()->GetAddress();
+        rrmGroup.insert(bssid);
+        devices[bssid] = dev;
+    }
+
+    void AddDevices(vector<std::shared_ptr<Scanner>>& dev) {
+        for (auto& d : dev) {
+            AddDevice(d);
+        }
+    }
+
+    RRMGreedyAlgo(std::vector<std::shared_ptr<Scanner>>& devs, vector<uint16_t> channels);
+    RRMGreedyAlgo(vector<uint16_t> channels) : channelsList(channels) {}
 };
 
 
