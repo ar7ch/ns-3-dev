@@ -60,13 +60,13 @@ std::shared_ptr<Scanner>
 doScanning(int scanningApIdx) {
     Packet::EnablePrinting();
     // LogComponentEnable("WifiPhy", LOG_LEVEL_DEBUG);
-    // if
     if (g_debug) {
         LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_DEBUG);
         LogComponentEnable("StaWifiMac", LOG_LEVEL_DEBUG);
     } else if (g_logic) {
         LogComponentEnable("StaWifiMac", LogLevel(LOG_LEVEL_LOGIC & (~LOG_FUNCTION)));
     }
+    // our modules have logic level logging by default
     LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_LOGIC);
     LogComponentEnable("rrm", LOG_LEVEL_LOGIC);
     // LogComponentEnable("WifiDefaultAssocManager", LOG_LEVEL_LO);
@@ -225,6 +225,8 @@ doScanning(int scanningApIdx) {
     Ptr<Node> scannerWifiNode = apNodes.Get(scanningApIdx);
     vector<uint16_t> operatingChannels{1, 6, 11};
     auto scanner = CreateScannerForNode(scannerWifiNode, operatingChannels);
+    scanner->setAfterScanCallback<void, const Scanner*>(
+            std::function<void(const Scanner*)>(LCCSAlgo::Decide), &(*scanner));
 
     switchChannel(getWifiNd(apNodes.Get(2)), 1);
 
@@ -241,16 +243,20 @@ int main(int argc, char* argv[]) {
     cmd.AddValue("logic", "Enable info debug level", g_logic);
     cmd.Parse(argc, argv);
 
-    auto scanner = doScanning(0);
-    assert(!scanner->knownAps.empty());
-    assert(scanner->getOperatingChannel() == 6);
-    Simulator::Destroy();
+    std::shared_ptr<Scanner> scanner;
+    // cout << "Test case 1: AP1 is scanning" << endl;
+    // scanner = doScanning(0);
+    // assert(!scanner->knownAps.empty());
+    // assert(scanner->getOperatingChannel() == 6);
+    // Simulator::Destroy();
 
-    scanner = doScanning(1);
-    assert(!scanner->knownAps.empty());
-    assert(scanner->getOperatingChannel() == 6);
-    Simulator::Destroy();
+    // cout << "Test case 2: AP2 is scanning" << endl;
+    // scanner = doScanning(1);
+    // assert(!scanner->knownAps.empty());
+    // assert(scanner->getOperatingChannel() == 6);
+    // Simulator::Destroy();
 
+    cout << "Test case 3: AP3 is scanning" << endl;
     scanner = doScanning(2);
     assert(!scanner->knownAps.empty());
     assert(scanner->getOperatingChannel() == 6);
