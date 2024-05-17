@@ -163,9 +163,11 @@ public:
 
 class RRMGreedyAlgo {
 
-    const double MinSignal = -100;
-    const double MaxSignal = -25;
+    const double MinRSSI_dbm = -100;
+    const double MaxRSSI_dbm = -25;
     const double scandataStaleTime_s = 5.0;
+    const double MaxTxPower_dbm = 30.0;
+    const double MinTxPower_dbm = 10.0;
 
     std::vector<uint16_t> channelsList; // assumed to be the same in the group
 
@@ -179,6 +181,7 @@ class RRMGreedyAlgo {
     struct IfaceAirData {
         Scanner::ScanDataTable signals;
         uint16_t channel = -1;
+        double txPowerDbm = 0.0;
         double txDiff = 0.0;
         uint16_t width = 20;
     };
@@ -191,7 +194,11 @@ class RRMGreedyAlgo {
 
     double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20);
 
-    double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState, uint16_t ifaceChannel);
+    double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState,
+            uint16_t ifaceChannel);
+
+    std::pair<double, double> FromIfaceInterference(const Mac48Address& bssid,
+            GroupState& groupState);
 
     double GroupInterference(GroupState& groupState);
 

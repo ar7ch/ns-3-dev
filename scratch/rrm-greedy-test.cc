@@ -58,7 +58,9 @@ static bool g_debug = false;
 static bool g_logic = false;
 
 vector<std::shared_ptr<Scanner>>
-doScanning(vector<uint16_t>& apChannelAllocation, vector<uint16_t>& apStaAllocation) {
+doScanning(vector<uint16_t>& apChannelAllocation,
+           vector<uint16_t>& apStaAllocation,
+           vector<uint16_t> channelsToScan={1, 6, 11}) {
     Packet::EnablePrinting();
     // LogComponentEnable("WifiPhy", LOG_LEVEL_DEBUG);
     if (g_debug) {
@@ -102,6 +104,12 @@ doScanning(vector<uint16_t>& apChannelAllocation, vector<uint16_t>& apStaAllocat
     // setup wifi channel helper
     YansWifiPhyHelper wifiPhy;
     YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
+    // below code is not needed: Default() applies these settings already.
+    // double exponent = 3.0;
+    // wifiChannel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+    // wifiChannel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+    //                            "Exponent",
+    //                            DoubleValue(PathLossExponent));
     wifiPhy.SetChannel(wifiChannel.Create());
 
     InternetStackHelper stack;
@@ -109,12 +117,16 @@ doScanning(vector<uint16_t>& apChannelAllocation, vector<uint16_t>& apStaAllocat
     address.SetBase("1.1.1.0", "255.255.255.0");
     vector<Ipv4InterfaceContainer> staInterfaces(n_aps);
 
+    double initialApTxPower_dbm = 20.0;
     // setup APs
     auto setupAp = [&](Ptr<Node> apNode_i, NetDeviceContainer& apDev_i, string ssid) {
         wifiMac.SetType("ns3::ApWifiMac",
                 "Ssid", SsidValue(Ssid(ssid)),
                 "QosSupported", BooleanValue(false)
         );
+        wifiPhy.Set("TxPowerStart", DoubleValue(initialApTxPower_dbm));
+        wifiPhy.Set("TxPowerEnd", DoubleValue(initialApTxPower_dbm));
+        wifiPhy.Set("TxPowerLevels", UintegerValue(1));
         apDev_i = wifi.Install(wifiPhy, wifiMac, apNode_i);
     };
 
@@ -215,7 +227,7 @@ doScanning(vector<uint16_t>& apChannelAllocation, vector<uint16_t>& apStaAllocat
     }
 
     vector<std::shared_ptr<Scanner>> scanners;
-    vector<uint16_t> channelsToScan{1, 6, 11};
+    // vector<uint16_t> channelsToScan{1, 6, 11};
 
     // Initialize a random number generator with a given seed
     // constexpr int SEED = 1;
@@ -230,7 +242,7 @@ doScanning(vector<uint16_t>& apChannelAllocation, vector<uint16_t>& apStaAllocat
 
     for (size_t i = 0; i < apNodes.GetN(); i++) {
         auto apNode = apNodes.Get(i);
-        std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "sta-" + std::to_string(i));
+        std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
         scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
                 std::function<void(RRMGreedyAlgo*, Scanner*)>(
                     RRMGreedyAlgo::AddApScandata_s
@@ -258,19 +270,32 @@ int main(int argc, char* argv[]) {
     cmd.AddValue("logic", "Enable info debug level", g_logic);
     cmd.Parse(argc, argv);
 
-    vector<shared_ptr<Scanner>> scanners(3);
+    const int NUM_APS = 4;
+    vector<shared_ptr<Scanner>> scanners(NUM_APS);
 
     vector<uint16_t> apChannelAllocation = {
+        1,
         1,
         1,
         1
     };
 
+    assert(apChannelAllocation.size() == NUM_APS &&
+            std::string(
+                "expected NUM_APS=" + std::to_string(NUM_APS) + ", got " + std::to_string(apChannelAllocation.size()) + " channel allocations"
+                ).c_str());
+
     vector<uint16_t> apStaAllocation = {
         3,
         2,
+        2,
         2
     };
+
+    assert(apStaAllocation.size() == NUM_APS &&
+            std::string(
+                "expected NUM_APS=" + std::to_string(NUM_APS) + ", got " + std::to_string(apStaAllocation.size()) + " channel allocations"
+                ).c_str());
 
     scanners = doScanning(apChannelAllocation, apStaAllocation);
     Simulator::Destroy();
