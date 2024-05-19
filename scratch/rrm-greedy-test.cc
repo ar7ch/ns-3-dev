@@ -43,11 +43,14 @@
 #include <cassert>
 #include <random>
 #include <iomanip>
+#include "ns3/netanim-module.h"
+
 
 using namespace ns3;
 using std::cout, std::endl, std::setw, std::setprecision,
       std::vector, std::string, std::map, std::set, std::shared_ptr;
 NS_LOG_COMPONENT_DEFINE("wifi-monitor-mode");
+
 
 #define LOG_LOGIC(x) do { NS_LOG_LOGIC(std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
 #define LOG_DEBUG(x) do { NS_LOG_DEBUG(std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
@@ -62,6 +65,7 @@ doScanning(vector<uint16_t>& apChannelAllocation,
            vector<uint16_t>& apStaAllocation,
            vector<uint16_t> channelsToScan={1, 6, 11}) {
     Packet::EnablePrinting();
+    RngSeedManager::SetSeed(2);
     // LogComponentEnable("WifiPhy", LOG_LEVEL_DEBUG);
     if (g_debug) {
         LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_DEBUG);
@@ -97,6 +101,49 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     apNodes.Create(n_aps);
     packetSocket.Install(apNodes);
 
+    // setup mobility for APs
+    vector<Vector> apPosVectors = {
+        {0.0, 0.0, 0.0},
+        {4.0, 0.0, 0.0},
+        {0.0, 7.0, 0.0},
+        {5.0, 5.0, 0.0},
+    };
+    Ptr<ListPositionAllocator> listPos = CreateObject<ListPositionAllocator>();
+    for (auto& v : apPosVectors) {
+        listPos->Add(v);
+    }
+    mobility.SetPositionAllocator(listPos);
+    // mobility.SetPositionAllocator(
+    //     "ns3::GridPositionAllocator",
+    //     "MinX", DoubleValue(0.0),
+    //     "MinY", DoubleValue(0.0),
+    //     "DeltaX", DoubleValue(5.0),
+    //     "DeltaY", DoubleValue(5.0),
+    //     "GridWidth", UintegerValue(2),
+    //     "LayoutType", StringValue("RowFirst")
+    // );
+    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    mobility.Install(apNodes);
+
+    // setup mobility for STAs: distribute them randomly around each AP
+    for (int i = 0; i < n_aps; i++) {
+        std::string x = std::to_string(apPosVectors[i].x);
+        std::string y = std::to_string(apPosVectors[i].y);
+        std::string z = std::to_string(apPosVectors[i].z);
+        std::string rho = "7.0";
+        mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
+                                      "X", StringValue(x),
+                                      "Y", StringValue(y),
+                                      "Z", StringValue(z),
+                                      "Rho", StringValue("ns3::UniformRandomVariable[Min=1|Max=3]") //
+        );
+        mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        mobility.Install(staNodes[i]);
+
+    }
+
+    // setup mobility for STAs
+
     // setup wifi
     wifi.SetStandard(WIFI_STANDARD_80211n);
 
@@ -130,12 +177,25 @@ doScanning(vector<uint16_t>& apChannelAllocation,
         apDev_i = wifi.Install(wifiPhy, wifiMac, apNode_i);
     };
 
+    // setup animation
+    AnimationInterface anim("rrmgreedy.xml");
+    auto setupApAnim = [&anim](Ptr<Node> apNode, int i) {
+        anim.UpdateNodeColor(apNode, (50 + (20*i)) % 256, 0, 0); // red
+        anim.UpdateNodeSize(apNode->GetId(), 1.0, 1.0);
+        anim.UpdateNodeDescription(apNode, "AP-" + std::to_string(i));
+    };
+
+
     for (int i = 0; i < n_aps; i++) {
         setupAp(apNodes.Get(i), apDevs, "ssid-" + std::to_string(i));
+        setupApAnim(apNodes.Get(i), i);
     }
-    mobility.Install(apNodes);
-    stack.Install(apNodes);
-    Ipv4InterfaceContainer apInterfaces = address.Assign(apDevs);
+
+    do {
+        // mobility.Install(apNodes);
+        stack.Install(apNodes);
+        Ipv4InterfaceContainer apInterfaces = address.Assign(apDevs);
+    } while(false);
 
 
     constexpr double udpStartTime = 0.5;
@@ -179,16 +239,29 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     };
     // setup stas.
 
+    auto setupSTAAnimation = [&anim](NodeContainer staNodes_ap_i, int i) {
+        for (size_t k = 0; k < staNodes_ap_i.GetN(); k++) {
+            anim.UpdateNodeColor(staNodes_ap_i.Get(k), 0, (150 + 20*(i)) %  256, 0); // green
+            anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
+            std::stringstream staname;
+            staname << "STA " << i << "-" << k;
+            anim.UpdateNodeDescription(staNodes_ap_i.Get(k), staname.str());
+        }
+    };
+
     for (int i = 0; i < n_aps; i++) {
         setupSta(staNodes[i], staDevs[i], "ssid-" + std::to_string(i));
-        mobility.Install(staNodes[i]);
+        // mobility.Install(staNodes[i]);
         stack.Install(staNodes[i]);
         staInterfaces[i] = address.Assign(staDevs[i]);
         setupUdpEchoClientServer(staNodes[i].Get(0), staNodes[i].Get(1), staInterfaces[i]);
+        setupSTAAnimation(staNodes[i], i);
     }
+
 
     /* Populate routing table */
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
 
     // constexpr uint16_t echoPort = 9;
     // UdpEchoServerHelper echoServer(echoPort);
