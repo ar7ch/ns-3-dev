@@ -41,15 +41,20 @@
 #include "ns3/net-device.h"
 #include "ns3/rrm.h"
 #include <cassert>
-#include <random>
+// #include <random>
 #include <iomanip>
 #include "ns3/netanim-module.h"
+#include "ns3/simulator-impl.h"
+#include "ns3/flow-monitor-helper.h"
+#include "ns3/ipv4-flow-classifier.h"
+// #include "ns3/visualizer.h"
+// #include "ns3/visual-simulator-impl.h"
 
 
 using namespace ns3;
 using std::cout, std::endl, std::setw, std::setprecision,
       std::vector, std::string, std::map, std::set, std::shared_ptr;
-NS_LOG_COMPONENT_DEFINE("wifi-monitor-mode");
+NS_LOG_COMPONENT_DEFINE("rrm-greedy-test");
 
 
 #define LOG_LOGIC(x) do { NS_LOG_LOGIC(std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
@@ -64,17 +69,17 @@ vector<std::shared_ptr<Scanner>>
 doScanning(vector<uint16_t>& apChannelAllocation,
            vector<uint16_t>& apStaAllocation,
            vector<uint16_t> channelsToScan={1, 6, 11}) {
-    Packet::EnablePrinting();
+    // Packet::EnablePrinting();
     RngSeedManager::SetSeed(2);
     // LogComponentEnable("WifiPhy", LOG_LEVEL_DEBUG);
     if (g_debug) {
-        LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_DEBUG);
+        LogComponentEnable("rrm-greedy-test", LOG_LEVEL_DEBUG);
         LogComponentEnable("StaWifiMac", LOG_LEVEL_DEBUG);
     } else if (g_logic) {
         LogComponentEnable("StaWifiMac", LogLevel(LOG_LEVEL_LOGIC & (~LOG_FUNCTION)));
     }
     // our modules have logic level logging by default
-    LogComponentEnable("wifi-monitor-mode", LOG_LEVEL_LOGIC);
+    LogComponentEnable("rrm-greedy-test", LOG_LEVEL_LOGIC);
     LogComponentEnable("rrm", LOG_LEVEL_LOGIC);
     // LogComponentEnable("WifiDefaultAssocManager", LOG_LEVEL_LO);
     //
@@ -130,12 +135,12 @@ doScanning(vector<uint16_t>& apChannelAllocation,
         std::string x = std::to_string(apPosVectors[i].x);
         std::string y = std::to_string(apPosVectors[i].y);
         std::string z = std::to_string(apPosVectors[i].z);
-        std::string rho = "7.0";
+        // std::string rho = "7.0";
         mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
                                       "X", StringValue(x),
                                       "Y", StringValue(y),
                                       "Z", StringValue(z),
-                                      "Rho", StringValue("ns3::UniformRandomVariable[Min=1|Max=3]") //
+                                      "Rho", StringValue("ns3::UniformRandomVariable[Min=1|Max=1.5]") //
         );
         mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
         mobility.Install(staNodes[i]);
@@ -146,6 +151,10 @@ doScanning(vector<uint16_t>& apChannelAllocation,
 
     // setup wifi
     wifi.SetStandard(WIFI_STANDARD_80211n);
+    // uint32_t rtsThreshold = 65535;
+    // std::string staManager = "ns3::MinstrelHtWifiManager";
+    // std::string apManager = "ns3::MinstrelHtWifiManager";
+    // wifi.SetRemoteStationManager(apManager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
 
     WifiMacHelper wifiMac;
     // setup wifi channel helper
@@ -181,7 +190,7 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     AnimationInterface anim("rrmgreedy.xml");
     auto setupApAnim = [&anim](Ptr<Node> apNode, int i) {
         anim.UpdateNodeColor(apNode, (50 + (20*i)) % 256, 0, 0); // red
-        anim.UpdateNodeSize(apNode->GetId(), 1.0, 1.0);
+        // anim.UpdateNodeSize(apNode->GetId(), 1.0, 1.0);
         anim.UpdateNodeDescription(apNode, "AP-" + std::to_string(i));
     };
 
@@ -198,8 +207,10 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     } while(false);
 
 
-    constexpr double udpStartTime = 0.5;
-    constexpr double udpEndTime = 10.0;
+    constexpr double simulationStartTime = 0.0;
+    constexpr double simulationEndTime = 10.0;
+    constexpr double udpStartTime = simulationStartTime + 0.5;
+    constexpr double udpEndTime = simulationEndTime;
     auto setupUdpEchoClientServer = [](Ptr<Node> nodeServer,
                                         Ptr<Node> nodeClient,
                                         Ipv4InterfaceContainer& staInterfaces,
@@ -209,12 +220,12 @@ doScanning(vector<uint16_t>& apChannelAllocation,
 
         UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
         double maxPackets = 0; // 0 means unlimited
-        double packetInterval = 0.1; // 0.005;
+        double packetInterval = 0.0005; // 0.005;
         int packetSize = 1024;
         echoClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
         echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
-        echoClient.SetAttribute("PacketSize", UintegerValue(1024));
-        NS_LOG_LOGIC("UDP packets rate: " << ((packetSize / packetInterval) / 1024) * 8 << " kbps");
+        echoClient.SetAttribute("PacketSize", UintegerValue(packetSize));
+        NS_LOG_LOGIC("UDP packets rate: " << ((packetSize*8 / packetInterval) / 1000 / 1000) << " Mbps");
         ApplicationContainer clientApps = echoClient.Install(nodeClient);
 
         serverApps.Start(Seconds(udpStartTime));
@@ -239,13 +250,15 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     };
     // setup stas.
 
-    auto setupSTAAnimation = [&anim](NodeContainer staNodes_ap_i, int i) {
+    auto setupSTAAnimation = [&anim, &staInterfaces](NodeContainer staNodes_ap_i, int i) {
         for (size_t k = 0; k < staNodes_ap_i.GetN(); k++) {
             anim.UpdateNodeColor(staNodes_ap_i.Get(k), 0, (150 + 20*(i)) %  256, 0); // green
-            anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
+            // anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
+            auto [ipv4, _] = staInterfaces[i].Get(k);
             std::stringstream staname;
-            staname << "STA " << i << "-" << k;
+            staname << "STA " << i << "-" << k << "\n" << "(" << ipv4->GetAddress(1, 0).GetLocal() << ")";
             anim.UpdateNodeDescription(staNodes_ap_i.Get(k), staname.str());
+
         }
     };
 
@@ -257,6 +270,9 @@ doScanning(vector<uint16_t>& apChannelAllocation,
         setupUdpEchoClientServer(staNodes[i].Get(0), staNodes[i].Get(1), staInterfaces[i]);
         setupSTAAnimation(staNodes[i], i);
     }
+
+    FlowMonitorHelper flowmon;
+    Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
 
     /* Populate routing table */
@@ -300,7 +316,6 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     }
 
     vector<std::shared_ptr<Scanner>> scanners;
-    // vector<uint16_t> channelsToScan{1, 6, 11};
 
     // Initialize a random number generator with a given seed
     // constexpr int SEED = 1;
@@ -329,15 +344,46 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     }
     rrmgreedy->AddDevices(scanners);
 
+
     Simulator::Schedule(Seconds(7.0), [&rrmgreedy](){rrmgreedy->Decide();});
 
+    anim.EnablePacketMetadata(true);
+    anim.EnableIpv4L3ProtocolCounters(Seconds(0), Seconds(10)); // Optional
+    anim.EnableWifiMacCounters(Seconds(0), Seconds(10)); // Optional
+    anim.EnableWifiPhyCounters(Seconds(0), Seconds(10)); // Optional
+    anim.EnableIpv4RouteTracking("routingtable-rrmgreedy.xml",
+                                 Seconds(0),
+                                 Seconds(10),
+                                 Seconds(0.25));         // Optional
     Simulator::Run();
 
+    // print metrics
+    monitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
+    FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
+    for (auto i = stats.begin(); i != stats.end(); ++i)
+    {
+        Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
+
+        std::cout << "Flow " << i->first << " (" << t.sourceAddress << " -> "
+                  << t.destinationAddress << ")\n";
+        std::cout << "  Tx Packets: " << i->second.txPackets << "\n";
+        std::cout << "  Tx Bytes:   " << i->second.txBytes << "\n";
+        std::cout << "  TxOffered:  "
+                  << i->second.txBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
+                  << " Mbps\n";
+        std::cout << "  Rx Packets: " << i->second.rxPackets << "\n";
+        std::cout << "  Rx Bytes:   " << i->second.rxBytes << "\n";
+        std::cout << "  Throughput: "
+                  << i->second.rxBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
+                  << " Mbps\n";
+    }
     return scanners;
 }
 
 int main(int argc, char* argv[]) {
     CommandLine cmd(__FILE__);
+    // { PyViz v; }
     cmd.AddValue("verbose", "Print trace information if true", g_verbose);
     cmd.AddValue("debug", "Print debug information if true", g_debug);
     cmd.AddValue("logic", "Enable info debug level", g_logic);

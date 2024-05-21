@@ -19,6 +19,7 @@
 using std::cout, std::endl, std::setw, std::setprecision, std::vector, std::string, std::map, std::set;
 NS_LOG_COMPONENT_DEFINE("rrm");
 
+
 namespace ns3 {
 
 map<uint16_t, uint16_t> ofdmFreqToChanNumber = {
@@ -607,6 +608,7 @@ RRMGreedyAlgo::Decide() {
     }
     // TPC
     bool managePower = true;
+    bool alreadyPrintedIad = false;
     prevGroupInterf = groupInterf;
     if (managePower) {
         NS_LOG_LOGIC("5. Starting TPC");
@@ -616,6 +618,10 @@ RRMGreedyAlgo::Decide() {
             double worstSignal = 0.0;
             // find the worst interface
             for (auto& [bssid, ifaceState] : groupState) {
+                if (!alreadyPrintedIad) {
+                    PrintIfaceAirData(groupState, bssid);
+                    alreadyPrintedIad = true;
+                }
                 auto [ifaceInterf, ifaceSignal] = FromIfaceInterference(bssid, groupState);
                 if (ifaceInterf > worstInterf) {
                     worstInterf = ifaceInterf;
@@ -721,6 +727,37 @@ RRMGreedyAlgo::PrintGroupState(GroupState& groupState) {
                 << "\t" << ifaceData.channel
                 << "\t\t" << ifaceData.txPowerDbm + ifaceData.txDiff);
     }
+}
+
+void
+RRMGreedyAlgo::PrintIfaceAirData(GroupState& groupState, Mac48Address bssid) {
+
+    IfaceAirData& iad = groupState.at(bssid);
+    NS_LOG_LOGIC("InterfaceAirData for " << bssid << " ("
+            << "ch=" << iad.channel << ", "
+            << "txp=" << iad.txPowerDbm << "dBm" << ", "
+            << "txdiff=" << iad.txDiff
+            << ")"
+            );
+    NS_LOG_LOGIC("BSSID\t\t\tCH\tRSSI\t\tSNR");
+    NS_LOG_LOGIC("----------------------------------------------------------");
+    for (auto& [otherBssid, otherEnt] : iad.signals) {
+        int otherCh = otherEnt.channel;
+        if (rrmGroup.count(otherBssid) > 0) {
+            otherCh = groupState[otherBssid].channel;
+        }
+        NS_LOG_LOGIC(
+                otherBssid
+                << "\t"
+                << (otherCh == otherEnt.channel ?
+                    std::to_string(otherCh) : std::to_string(otherEnt.channel) + "->" + std::to_string(otherCh))
+                << "\t"
+                << otherEnt.rssi
+                << "\t"
+                << otherEnt.snr
+                );
+    }
+    NS_LOG_LOGIC("==========================================================");
 }
 
 } // ns3 namespace

@@ -16,6 +16,10 @@
 
 
 namespace ns3 {
+
+
+#define IN_MAP(_map, _key) (_map.count(_key) > 0)
+
 using std::vector, std::map, std::set, std::cout, std::endl, std::string;
 
 class ICallbackHolder {
@@ -212,6 +216,8 @@ class RRMGreedyAlgo {
         return (Simulator::Now().GetSeconds() - scandataTimestamp) > scandataStaleTime_s;
     }
     void PrintGroupState(GroupState& groupState);
+    // void PrintScanData(Scanner::ScanData& scandata);
+    void PrintIfaceAirData(GroupState& groupState, Mac48Address bssid);
 
     public:
 
