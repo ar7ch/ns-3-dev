@@ -65,6 +65,8 @@ static bool g_verbose = false;
 static bool g_debug = false;
 static bool g_logic = false;
 
+#define XML_NEWLINE "XMLNEWLINE"
+
 vector<std::shared_ptr<Scanner>>
 doScanning(vector<uint16_t>& apChannelAllocation,
            vector<uint16_t>& apStaAllocation,
@@ -106,15 +108,21 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     apNodes.Create(n_aps);
     packetSocket.Install(apNodes);
 
+    Vector startPos{3.0, 3.0, 0.0};
     // setup mobility for APs
-    vector<Vector> apPosVectors = {
+    vector<Vector> apPosRelativeVectors = {
         {0.0, 0.0, 0.0},
         {4.0, 0.0, 0.0},
         {0.0, 7.0, 0.0},
         {5.0, 5.0, 0.0},
     };
+
+    for (auto& v : apPosRelativeVectors) {
+        v = v+startPos;
+    }
+
     Ptr<ListPositionAllocator> listPos = CreateObject<ListPositionAllocator>();
-    for (auto& v : apPosVectors) {
+    for (auto& v : apPosRelativeVectors) {
         listPos->Add(v);
     }
     mobility.SetPositionAllocator(listPos);
@@ -132,9 +140,9 @@ doScanning(vector<uint16_t>& apChannelAllocation,
 
     // setup mobility for STAs: distribute them randomly around each AP
     for (int i = 0; i < n_aps; i++) {
-        std::string x = std::to_string(apPosVectors[i].x);
-        std::string y = std::to_string(apPosVectors[i].y);
-        std::string z = std::to_string(apPosVectors[i].z);
+        std::string x = std::to_string(apPosRelativeVectors[i].x);
+        std::string y = std::to_string(apPosRelativeVectors[i].y);
+        std::string z = std::to_string(apPosRelativeVectors[i].z);
         // std::string rho = "7.0";
         mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
                                       "X", StringValue(x),
@@ -143,6 +151,9 @@ doScanning(vector<uint16_t>& apChannelAllocation,
                                       "Rho", StringValue("ns3::UniformRandomVariable[Min=1|Max=1.5]") //
         );
         mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        // mobility.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
+        //                           "Bounds",
+        //                           RectangleValue(Rectangle(x+2, 50, -25, 50)));
         mobility.Install(staNodes[i]);
 
     }
@@ -206,6 +217,8 @@ doScanning(vector<uint16_t>& apChannelAllocation,
         Ipv4InterfaceContainer apInterfaces = address.Assign(apDevs);
     } while(false);
 
+    map<Ipv4Address, Mac48Address> ip2mac;
+    map<Mac48Address, Ipv4Address> mac2ip;
 
     constexpr double simulationStartTime = 0.0;
     constexpr double simulationEndTime = 10.0;
@@ -250,14 +263,24 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     };
     // setup stas.
 
-    auto setupSTAAnimation = [&anim, &staInterfaces](NodeContainer staNodes_ap_i, int i) {
+    auto setupSTAAnimation = [&anim, &staInterfaces, &ip2mac, &mac2ip](NodeContainer staNodes_ap_i, int i) {
         for (size_t k = 0; k < staNodes_ap_i.GetN(); k++) {
-            anim.UpdateNodeColor(staNodes_ap_i.Get(k), 0, (150 + 20*(i)) %  256, 0); // green
+            Ptr<Node> sta_i_k = staNodes_ap_i.Get(k);
+            anim.UpdateNodeColor(sta_i_k, 0, (100 + 50*(i)) %  256, 0); // green
             // anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
             auto [ipv4, _] = staInterfaces[i].Get(k);
             std::stringstream staname;
-            staname << "STA " << i << "-" << k << "\n" << "(" << ipv4->GetAddress(1, 0).GetLocal() << ")";
-            anim.UpdateNodeDescription(staNodes_ap_i.Get(k), staname.str());
+            Ipv4Address staIp = ipv4->GetAddress(1, 0).GetLocal();
+            Mac48Address staMac = getWifiNd(sta_i_k)->GetMac()->GetAddress();
+            ip2mac[staIp] = staMac;
+            mac2ip[staMac] = staIp;
+            std::stringstream staMacStr_ss;
+            staMacStr_ss << staMac;
+            string staMacStr = staMacStr_ss.str().substr(14);
+            staname << "STA " << i << "-" << k << XML_NEWLINE
+                << "(" << staIp << ")" << staMacStr;
+
+            anim.UpdateNodeDescription(sta_i_k, staname.str());
 
         }
     };
@@ -330,7 +353,8 @@ doScanning(vector<uint16_t>& apChannelAllocation,
 
     for (size_t i = 0; i < apNodes.GetN(); i++) {
         auto apNode = apNodes.Get(i);
-        std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
+        // std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
+        std::shared_ptr<Scanner> scanner;
         scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
                 std::function<void(RRMGreedyAlgo*, Scanner*)>(
                     RRMGreedyAlgo::AddApScandata_s
@@ -342,10 +366,10 @@ doScanning(vector<uint16_t>& apChannelAllocation,
         Simulator::Schedule(Seconds(apScanStart_s), &Scanner::Scan, &(*scanner));
         scanners.push_back(scanner);
     }
-    rrmgreedy->AddDevices(scanners);
+    // rrmgreedy->AddDevices(scanners);
 
 
-    Simulator::Schedule(Seconds(7.0), [&rrmgreedy](){rrmgreedy->Decide();});
+    // Simulator::Schedule(Seconds(7.0), [&rrmgreedy](){rrmgreedy->Decide();});
 
     anim.EnablePacketMetadata(true);
     anim.EnableIpv4L3ProtocolCounters(Seconds(0), Seconds(10)); // Optional
