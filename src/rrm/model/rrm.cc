@@ -76,7 +76,14 @@ assembleChannelSettings(uint16_t channel, uint16_t width, string band) {
 }
 
 void
-switchChannelv2(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel, WifiPhyBand band, uint16_t width) {
+setTxPower_attr(Ptr<WifiNetDevice> dev, double txPowerDbm) {
+    Ptr<WifiPhy> phy = dev->GetPhy();
+    phy->SetTxPowerStart(txPowerDbm);
+    phy->SetTxPowerEnd(txPowerDbm);
+}
+
+void
+switchChannel_event(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel, WifiPhyBand band, uint16_t width) {
     Ptr<WifiPhy> phy = dev->GetPhy();
     if (phy->IsStateSleep())
     {
@@ -84,7 +91,7 @@ switchChannelv2(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel, WifiPhyBan
     }
     if (phy->IsStateSwitching()){
         SIM_LOG_DEBUG("AP channel switch is in progress, postpone the switch");
-        Simulator::Schedule(Seconds(0.1), &switchChannelv2, dev, newOperatingChannel, band, width);
+        Simulator::Schedule(Seconds(0.1), &switchChannel_event, dev, newOperatingChannel, band, width);
     }
 
     WifiPhyOperatingChannel channelToSwitch = WifiPhyOperatingChannel(WifiPhyOperatingChannel::FindFirst(
@@ -105,7 +112,7 @@ switchChannelv2(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel, WifiPhyBan
 }
 
 void
-switchChannel(Ptr<WifiNetDevice> dev, uint16_t operatingChannel, WifiPhyBand band, uint16_t width) {
+switchChannel_attr(Ptr<WifiNetDevice> dev, uint16_t operatingChannel, WifiPhyBand band, uint16_t width) {
     string bandStr;
     switch(band) {
         case WIFI_PHY_BAND_2_4GHZ:
@@ -148,7 +155,7 @@ Scanner::scanChannel(std::vector<uint16_t>::iterator nextChanIt) {
         return;
     }
     uint16_t channel = *nextChanIt;
-    switchChannel(dev, channel);
+    switchChannel_attr(dev, channel);
     state = ScanState::SCAN_IN_PROGRESS_MON_MODE;
     SIM_LOG_LOGIC(id_ << ": " << "Scanning channel " << +channel);
     nextChanIt++;
@@ -157,7 +164,7 @@ Scanner::scanChannel(std::vector<uint16_t>::iterator nextChanIt) {
 
 void
 Scanner::returnToDataChannel(std::vector<uint16_t>::iterator nextChanIt) {
-    switchChannel(dev, dataChannel);
+    switchChannel_attr(dev, dataChannel);
     state = ScanState::SCAN_IN_PROCESSS_AP_MODE;
     SIM_LOG_LOGIC(id_ << ": " << "Returning to data channel " << +dataChannel);
     if (nextChanIt != channelsToScan.end() && *nextChanIt == dataChannel) {
@@ -264,7 +271,7 @@ void LCCSAlgo::Decide(const Scanner* const scanner) {
         cout << endl;
     }
     SIM_LOG_LOGIC("LCCS: switching to channel " << newChannel);
-    switchChannel(dev, newChannel);
+    switchChannel_attr(dev, newChannel);
 }
 
 // since no additional parameters can be passed to the callback, we maintain
@@ -533,9 +540,17 @@ void
 RRMGreedyAlgo::updateAPsConfig(GroupState& groupState) {
     for (auto& [bssid, ifaceState] : groupState) {
         auto iface = devices[bssid];
-        switchChannelv2(iface->GetDevice(), ifaceState.channel);
+        switchChannel_event(iface->GetDevice(), ifaceState.channel);
         // iface->GetDevice()->GetPhy()->SetTxPowerStart(ifaceState.txPowerDbm + ifaceState.txDiff);
         // iface->GetDevice()->GetPhy()->SetTxPowerEnd(ifaceState.txPowerDbm + ifaceState.txDiff);
+    }
+}
+
+void
+RRMGreedyAlgo::updateRrmResults(GroupState& groupState) {
+    for (auto& [bssid, ifaceData] : groupState) {
+        rrmResults[bssid] = {ifaceData.channel, ifaceData.txPowerDbm + ifaceData.txDiff};
+        NS_LOG_LOGIC("RRM result for " << bssid << ": ch=" << rrmResults[bssid].first << " txp=" << rrmResults[bssid].second);
     }
 }
 
@@ -669,8 +684,9 @@ RRMGreedyAlgo::Decide() {
     NS_LOG_LOGIC("New group state:");
     PrintGroupState(groupState);
     NS_LOG_LOGIC("=====");
-    NS_LOG_LOGIC("6. Updating APs configuration");
-    updateAPsConfig(groupState);
+    NS_LOG_LOGIC("6. Updating APs configuration DISABLED, NO CHANGES APPLIED");
+    // updateAPsConfig(groupState);
+    updateRrmResults(groupState);
 }
 
 void RRMGreedyAlgo::AddApScandata(const Scanner *scanner) {

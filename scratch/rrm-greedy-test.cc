@@ -67,8 +67,11 @@ static bool g_logic = false;
 
 #define XML_NEWLINE "XMLNEWLINE"
 
-vector<std::shared_ptr<Scanner>>
-doScanning(vector<uint16_t>& apChannelAllocation,
+std::pair<
+    vector<std::shared_ptr<Scanner>>,
+    std::shared_ptr<RRMGreedyAlgo>
+>
+doInitialSim(vector<uint16_t>& apChannelAllocation,
            vector<uint16_t>& apStaAllocation,
            vector<uint16_t> channelsToScan={1, 6, 11}) {
     // Packet::EnablePrinting();
@@ -198,7 +201,7 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     };
 
     // setup animation
-    AnimationInterface anim("rrmgreedy.xml");
+    AnimationInterface anim("rrmgreedy-before.xml");
     auto setupApAnim = [&anim](Ptr<Node> apNode, int i) {
         anim.UpdateNodeColor(apNode, (50 + (20*i)) % 256, 0, 0); // red
         // anim.UpdateNodeSize(apNode->GetId(), 1.0, 1.0);
@@ -301,20 +304,311 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     /* Populate routing table */
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
 
+    // simulation
+    Simulator::Stop(Seconds(udpEndTime));
+    for (auto it = apNodes.Begin(); it != apNodes.End(); ++it) {
+        int i = it - apNodes.Begin();
+        SIM_LOG_LOGIC("AP " << i
+             << ",channel: " << +getWifiNd(*it)->GetPhy()->GetOperatingChannel().GetNumber()
+             << ",ssid: " << getWifiNd(*it)->GetMac()->GetSsid().PeekString()
+             << ",bssid: " << (*it)->GetDevice(0)->GetAddress()
+        );
+    }
 
-    // constexpr uint16_t echoPort = 9;
-    // UdpEchoServerHelper echoServer(echoPort);
-    // ApplicationContainer serverApps = echoServer.Install(staNodes.Get(0));
-    //
-    // UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
-    // double maxPackets = 0; // 0 means unlimited
-    // double packetInterval = 0.005;
-    // int packetSize = 1024;
-    // echoClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
-    // echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
-    // echoClient.SetAttribute("PacketSize", UintegerValue(1024));
-    // NS_LOG_LOGIC("Packets rate: " << ((packetSize / packetInterval) / 1024) * 8 << " kbps");
-    // ApplicationContainer clientApps = echoClient.Install(staNodes.Get(1));
+    for (const auto& staNodes_ap_i : staNodes) {
+        for (auto it = staNodes_ap_i.Begin(); it != staNodes_ap_i.End(); ++it) {
+            int i = it - staNodes_ap_i.Begin();
+            SIM_LOG_LOGIC("STA " << i
+                 << ",ssid: " << getWifiNd(*it)->GetMac()->GetSsid().PeekString()
+                 << ",channel: " << +getWifiNd(*it)->GetPhy()->GetOperatingChannel().GetNumber()
+                 << ",mac: " << (*it)->GetDevice(0)->GetAddress()
+            );
+        }
+    }
+
+    vector<std::shared_ptr<Scanner>> scanners;
+    std::shared_ptr<RRMGreedyAlgo> rrmgreedy = std::make_shared<RRMGreedyAlgo>(channelsToScan);
+
+    for (size_t i = 0; i < apNodes.GetN(); i++) {
+        auto apNode = apNodes.Get(i);
+        std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
+        // std::shared_ptr<Scanner> scanner;
+        scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
+                std::function<void(RRMGreedyAlgo*, Scanner*)>(
+                    RRMGreedyAlgo::AddApScandata_s
+                ),
+                &(*rrmgreedy),
+                &(*scanner)
+        );
+        const double apScanStart_s = 2.5 + (0.01*i);
+        Simulator::Schedule(Seconds(apScanStart_s), &Scanner::Scan, &(*scanner));
+        scanners.push_back(scanner);
+    }
+    rrmgreedy->AddDevices(scanners);
+
+
+    Simulator::Schedule(Seconds(7.0), [&rrmgreedy](){rrmgreedy->Decide();});
+
+    anim.EnablePacketMetadata(true);
+    anim.EnableIpv4L3ProtocolCounters(Seconds(0), Seconds(10)); // Optional
+    anim.EnableWifiMacCounters(Seconds(0), Seconds(10)); // Optional
+    anim.EnableWifiPhyCounters(Seconds(0), Seconds(10)); // Optional
+    anim.EnableIpv4RouteTracking("routingtable-rrmgreedy.xml",
+                                 Seconds(0),
+                                 Seconds(10),
+                                 Seconds(0.25));         // Optional
+    Simulator::Run();
+
+    // print metrics
+    monitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
+    FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
+    double totalRxBytes = 0;
+    for (auto i = stats.begin(); i != stats.end(); ++i)
+    {
+        Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
+        totalRxBytes += i->second.rxBytes;
+
+        std::cout << "Flow " << i->first << " (" << t.sourceAddress << " -> "
+                  << t.destinationAddress << ")\n";
+        std::cout << "  Tx Packets: " << i->second.txPackets << "\n";
+        std::cout << "  Tx Bytes:   " << i->second.txBytes << "\n";
+        std::cout << "  TxOffered:  "
+                  << i->second.txBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
+                  << " Mbps\n";
+        std::cout << "  Rx Packets: " << i->second.rxPackets << "\n";
+        std::cout << "  Rx Bytes:   " << i->second.rxBytes << "\n";
+        std::cout << "  Throughput: "
+                  << i->second.rxBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
+                  << " Mbps\n";
+    }
+    cout << "Total throughput before RRM: " << totalRxBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000 << " Mbps" << endl;
+    return std::make_pair(scanners, rrmgreedy);
+}
+
+vector<std::shared_ptr<Scanner>>
+doRrmImprovedSim(
+           vector<uint16_t>& apChannelAllocation,
+           vector<uint16_t>& apTxpAllocationDbm,
+           vector<uint16_t>& apStaAllocation,
+           RrmResults& rrmResults,
+           vector<uint16_t> channelsToScan={1, 6, 11}) {
+    const int n_aps = apChannelAllocation.size();
+
+    WifiHelper wifi;
+    MobilityHelper mobility;
+    vector<NodeContainer> staNodes(n_aps);
+    NodeContainer apNodes;
+    // NodeContainer scanAp;
+
+    vector<NetDeviceContainer> staDevs(n_aps);
+    NetDeviceContainer apDevs;
+    PacketSocketHelper packetSocket;
+
+    const uint16_t initialWidth = 20;
+    const WifiPhyBand initialBand = WIFI_PHY_BAND_2_4GHZ;
+
+    // give packet socket powers to nodes.
+    for (int i = 0; i < n_aps; i++) {
+        staNodes[i].Create(apStaAllocation[i]);
+        packetSocket.Install(staNodes[i]);
+    }
+    apNodes.Create(n_aps);
+    packetSocket.Install(apNodes);
+
+    Vector startPos{3.0, 3.0, 0.0};
+    // setup mobility for APs
+    vector<Vector> apPosRelativeVectors = {
+        {0.0, 0.0, 0.0},
+        {4.0, 0.0, 0.0},
+        {0.0, 7.0, 0.0},
+        {5.0, 5.0, 0.0},
+    };
+
+    for (auto& v : apPosRelativeVectors) {
+        v = v+startPos;
+    }
+
+    Ptr<ListPositionAllocator> listPos = CreateObject<ListPositionAllocator>();
+    for (auto& v : apPosRelativeVectors) {
+        listPos->Add(v);
+    }
+    mobility.SetPositionAllocator(listPos);
+    // mobility.SetPositionAllocator(
+    //     "ns3::GridPositionAllocator",
+    //     "MinX", DoubleValue(0.0),
+    //     "MinY", DoubleValue(0.0),
+    //     "DeltaX", DoubleValue(5.0),
+    //     "DeltaY", DoubleValue(5.0),
+    //     "GridWidth", UintegerValue(2),
+    //     "LayoutType", StringValue("RowFirst")
+    // );
+    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    mobility.Install(apNodes);
+
+    // setup mobility for STAs: distribute them randomly around each AP
+    for (int i = 0; i < n_aps; i++) {
+        std::string x = std::to_string(apPosRelativeVectors[i].x);
+        std::string y = std::to_string(apPosRelativeVectors[i].y);
+        std::string z = std::to_string(apPosRelativeVectors[i].z);
+        // std::string rho = "7.0";
+        mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
+                                      "X", StringValue(x),
+                                      "Y", StringValue(y),
+                                      "Z", StringValue(z),
+                                      "Rho", StringValue("ns3::UniformRandomVariable[Min=1|Max=1.5]") //
+        );
+        mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        // mobility.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
+        //                           "Bounds",
+        //                           RectangleValue(Rectangle(x+2, 50, -25, 50)));
+        mobility.Install(staNodes[i]);
+
+    }
+
+    // setup mobility for STAs
+
+    // setup wifi
+    wifi.SetStandard(WIFI_STANDARD_80211n);
+    // uint32_t rtsThreshold = 65535;
+    // std::string staManager = "ns3::MinstrelHtWifiManager";
+    // std::string apManager = "ns3::MinstrelHtWifiManager";
+    // wifi.SetRemoteStationManager(apManager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
+
+    WifiMacHelper wifiMac;
+    // setup wifi channel helper
+    YansWifiPhyHelper wifiPhy;
+    YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
+    wifiPhy.SetChannel(wifiChannel.Create());
+
+    InternetStackHelper stack;
+    Ipv4AddressHelper address;
+    address.SetBase("1.1.1.0", "255.255.255.0");
+    vector<Ipv4InterfaceContainer> staInterfaces(n_aps);
+
+    double initialApTxPower_dbm = 20.0;
+    // setup APs
+    auto setupAp = [&](Ptr<Node> apNode_i, NetDeviceContainer& apDev_i, string ssid) {
+        wifiMac.SetType("ns3::ApWifiMac",
+                "Ssid", SsidValue(Ssid(ssid)),
+                "QosSupported", BooleanValue(false)
+        );
+        wifiPhy.Set("TxPowerStart", DoubleValue(initialApTxPower_dbm));
+        wifiPhy.Set("TxPowerEnd", DoubleValue(initialApTxPower_dbm));
+        wifiPhy.Set("TxPowerLevels", UintegerValue(1));
+        apDev_i = wifi.Install(wifiPhy, wifiMac, apNode_i);
+        Mac48Address bssid = getWifiNd(apNode_i)->GetMac()->GetAddress();
+        auto [chan_i, txp_i] = rrmResults.at(bssid);
+        NS_LOG_LOGIC("AP " << bssid << " switched to RrmResult channel " << chan_i << " and txp " << txp_i);
+        Ptr<WifiNetDevice> wifiNd_i = getWifiNd(apNode_i);
+        switchChannel_attr(wifiNd_i, chan_i, initialBand, initialWidth);
+        setTxPower_attr(wifiNd_i, txp_i);
+
+    };
+
+    // setup animation
+    AnimationInterface anim("rrmgreedy-after.xml");
+    auto setupApAnim = [&anim](Ptr<Node> apNode, int i) {
+        anim.UpdateNodeColor(apNode, (50 + (20*i)) % 256, 0, 0); // red
+        // anim.UpdateNodeSize(apNode->GetId(), 1.0, 1.0);
+        anim.UpdateNodeDescription(apNode, "AP-" + std::to_string(i));
+    };
+
+
+    for (int i = 0; i < n_aps; i++) {
+        setupAp(apNodes.Get(i), apDevs, "ssid-" + std::to_string(i));
+        setupApAnim(apNodes.Get(i), i);
+    }
+
+    do {
+        // mobility.Install(apNodes);
+        stack.Install(apNodes);
+        Ipv4InterfaceContainer apInterfaces = address.Assign(apDevs);
+    } while(false);
+
+    map<Ipv4Address, Mac48Address> ip2mac;
+    map<Mac48Address, Ipv4Address> mac2ip;
+
+    constexpr double simulationStartTime = 0.0;
+    constexpr double simulationEndTime = 10.0;
+    constexpr double udpStartTime = simulationStartTime + 0.5;
+    constexpr double udpEndTime = simulationEndTime;
+    auto setupUdpEchoClientServer = [](Ptr<Node> nodeServer,
+                                        Ptr<Node> nodeClient,
+                                        Ipv4InterfaceContainer& staInterfaces,
+                                        uint16_t echoPort=9) {
+        UdpEchoServerHelper echoServer(echoPort);
+        ApplicationContainer serverApps = echoServer.Install(nodeServer);
+
+        UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
+        double maxPackets = 0; // 0 means unlimited
+        double packetInterval = 0.0005; // 0.005;
+        int packetSize = 1024;
+        echoClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
+        echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
+        echoClient.SetAttribute("PacketSize", UintegerValue(packetSize));
+        NS_LOG_LOGIC("UDP packets rate: " << ((packetSize*8 / packetInterval) / 1000 / 1000) << " Mbps");
+        ApplicationContainer clientApps = echoClient.Install(nodeClient);
+
+        serverApps.Start(Seconds(udpStartTime));
+        clientApps.Start(Seconds(udpStartTime));
+        serverApps.Stop(Seconds(udpEndTime));
+        clientApps.Stop(Seconds(udpEndTime));
+        return std::make_pair(serverApps, clientApps);
+    };
+
+
+    auto setupSta = [&](NodeContainer& sta_i_nodes, NetDeviceContainer& sta_i_devs, string ssid) {
+        int initialChannel = 1;
+        TupleValue<UintegerValue, UintegerValue, EnumValue<WifiPhyBand>, UintegerValue> channelValue;
+        channelValue.Set(WifiPhy::ChannelTuple {initialChannel, initialWidth, initialBand, 0});
+        wifiPhy.Set("ChannelSettings", channelValue);
+        wifiMac.SetType("ns3::StaWifiMac",
+                        "ActiveProbing", BooleanValue(true),
+                        "Ssid", SsidValue(Ssid(ssid)),
+                        "QosSupported", BooleanValue(false)
+        );
+        sta_i_devs = wifi.Install(wifiPhy, wifiMac, sta_i_nodes);
+    };
+    // setup stas.
+
+    auto setupSTAAnimation = [&anim, &staInterfaces, &ip2mac, &mac2ip](NodeContainer staNodes_ap_i, int i) {
+        for (size_t k = 0; k < staNodes_ap_i.GetN(); k++) {
+            Ptr<Node> sta_i_k = staNodes_ap_i.Get(k);
+            anim.UpdateNodeColor(sta_i_k, 0, (100 + 50*(i)) %  256, 0); // green
+            // anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
+            auto [ipv4, _] = staInterfaces[i].Get(k);
+            std::stringstream staname;
+            Ipv4Address staIp = ipv4->GetAddress(1, 0).GetLocal();
+            Mac48Address staMac = getWifiNd(sta_i_k)->GetMac()->GetAddress();
+            ip2mac[staIp] = staMac;
+            mac2ip[staMac] = staIp;
+            std::stringstream staMacStr_ss;
+            staMacStr_ss << staMac;
+            string staMacStr = staMacStr_ss.str().substr(14);
+            staname << "STA " << i << "-" << k << XML_NEWLINE
+                << "(" << staIp << ")" << staMacStr << XML_NEWLINE
+                << "CH: " << +getWifiNd(sta_i_k)->GetPhy()->GetOperatingChannel().GetNumber();
+
+            anim.UpdateNodeDescription(sta_i_k, staname.str());
+
+        }
+    };
+
+    for (int i = 0; i < n_aps; i++) {
+        setupSta(staNodes[i], staDevs[i], "ssid-" + std::to_string(i));
+        // mobility.Install(staNodes[i]);
+        stack.Install(staNodes[i]);
+        staInterfaces[i] = address.Assign(staDevs[i]);
+        setupUdpEchoClientServer(staNodes[i].Get(0), staNodes[i].Get(1), staInterfaces[i]);
+        setupSTAAnimation(staNodes[i], i);
+    }
+
+    FlowMonitorHelper flowmon;
+    Ptr<FlowMonitor> monitor = flowmon.InstallAll();
+
+    /* Populate routing table */
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
 
     // simulation
     Simulator::Stop(Seconds(udpEndTime));
@@ -340,21 +634,12 @@ doScanning(vector<uint16_t>& apChannelAllocation,
 
     vector<std::shared_ptr<Scanner>> scanners;
 
-    // Initialize a random number generator with a given seed
-    // constexpr int SEED = 1;
-    // constexpr double min = 0.1;
-    // constexpr double max = 5.0;
-    // std::mt19937 rng(SEED);
-    // // Generate a random number
-    // std::uniform_real_distribution<double> uni(min, max); // inclusive min, exclusive max
-    // auto random_double = uni(rng);
-    //
     std::shared_ptr<RRMGreedyAlgo> rrmgreedy = std::make_shared<RRMGreedyAlgo>(channelsToScan);
 
     for (size_t i = 0; i < apNodes.GetN(); i++) {
         auto apNode = apNodes.Get(i);
-        // std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
-        std::shared_ptr<Scanner> scanner;
+        std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
+        // std::shared_ptr<Scanner> scanner;
         scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
                 std::function<void(RRMGreedyAlgo*, Scanner*)>(
                     RRMGreedyAlgo::AddApScandata_s
@@ -366,8 +651,7 @@ doScanning(vector<uint16_t>& apChannelAllocation,
         Simulator::Schedule(Seconds(apScanStart_s), &Scanner::Scan, &(*scanner));
         scanners.push_back(scanner);
     }
-    // rrmgreedy->AddDevices(scanners);
-
+    rrmgreedy->AddDevices(scanners);
 
     // Simulator::Schedule(Seconds(7.0), [&rrmgreedy](){rrmgreedy->Decide();});
 
@@ -385,23 +669,26 @@ doScanning(vector<uint16_t>& apChannelAllocation,
     monitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
     FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
-    for (auto i = stats.begin(); i != stats.end(); ++i)
+    double totalThroughput = 0.0;
+    for (auto stats_i = stats.begin(); stats_i != stats.end(); ++stats_i)
     {
-        Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
+        Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(stats_i->first);
+        totalThroughput += stats_i->second.rxBytes * 8.0;
 
-        std::cout << "Flow " << i->first << " (" << t.sourceAddress << " -> "
+        std::cout << "Flow " << stats_i->first << " (" << t.sourceAddress << " -> "
                   << t.destinationAddress << ")\n";
-        std::cout << "  Tx Packets: " << i->second.txPackets << "\n";
-        std::cout << "  Tx Bytes:   " << i->second.txBytes << "\n";
+        std::cout << "  Tx Packets: " << stats_i->second.txPackets << "\n";
+        std::cout << "  Tx Bytes:   " << stats_i->second.txBytes << "\n";
         std::cout << "  TxOffered:  "
-                  << i->second.txBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
+                  << stats_i->second.txBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
                   << " Mbps\n";
-        std::cout << "  Rx Packets: " << i->second.rxPackets << "\n";
-        std::cout << "  Rx Bytes:   " << i->second.rxBytes << "\n";
+        std::cout << "  Rx Packets: " << stats_i->second.rxPackets << "\n";
+        std::cout << "  Rx Bytes:   " << stats_i->second.rxBytes << "\n";
         std::cout << "  Throughput: "
-                  << i->second.rxBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
+                  << stats_i->second.rxBytes * 8.0 / (udpEndTime - udpStartTime) / 1000 / 1000
                   << " Mbps\n";
     }
+    std::cout << "Total throughput after RRM: " << totalThroughput / (udpEndTime - udpStartTime) / 1000 / 1000 << " Mbps" << std::endl;
     return scanners;
 }
 
@@ -414,13 +701,20 @@ int main(int argc, char* argv[]) {
     cmd.Parse(argc, argv);
 
     const int NUM_APS = 4;
-    vector<shared_ptr<Scanner>> scanners(NUM_APS);
+    // vector<shared_ptr<Scanner>> scanners(NUM_APS);
 
     vector<uint16_t> apChannelAllocation = {
         1,
         1,
         1,
         1
+    };
+
+    vector<uint16_t> apTxpAllocationDbm = {
+        20,
+        20,
+        20,
+        20
     };
 
     assert(apChannelAllocation.size() == NUM_APS &&
@@ -440,7 +734,11 @@ int main(int argc, char* argv[]) {
                 "expected NUM_APS=" + std::to_string(NUM_APS) + ", got " + std::to_string(apStaAllocation.size()) + " channel allocations"
                 ).c_str());
 
-    scanners = doScanning(apChannelAllocation, apStaAllocation);
+    auto [scanners, rrm] = doInitialSim(apChannelAllocation, apStaAllocation);
+    RrmResults rrmResults = rrm->GetRrmResults();
+    Simulator::Destroy();
+
+    doRrmImprovedSim(apChannelAllocation, apTxpAllocationDbm, apStaAllocation, rrmResults);
     Simulator::Destroy();
     return 0;
 }

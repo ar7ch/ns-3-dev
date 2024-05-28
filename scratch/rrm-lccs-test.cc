@@ -158,7 +158,7 @@ doScanning(int scanningApIdx) {
     // -------------------
 
     //
-    switchChannel(getWifiNd(apNodes.Get(1)), 11);
+    switchChannel_attr(getWifiNd(apNodes.Get(1)), 11);
 
     InternetStackHelper stack;
     stack.Install(staNodes);
@@ -228,7 +228,7 @@ doScanning(int scanningApIdx) {
     scanner->setAfterScanCallback<void, const Scanner*>(
             std::function<void(const Scanner*)>(LCCSAlgo::Decide), &(*scanner));
 
-    switchChannel(getWifiNd(apNodes.Get(2)), 1);
+    switchChannel_attr(getWifiNd(apNodes.Get(2)), 1);
 
     Simulator::Schedule(Seconds(2.5), &Scanner::Scan, &(*scanner));
     Simulator::Run();

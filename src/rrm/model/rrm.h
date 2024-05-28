@@ -50,12 +50,15 @@ string
 assembleChannelSettings(uint16_t channel, uint16_t width, string band);
 
 void
-switchChannelv2(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel,
+switchChannel_event(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel,
         WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20);
 
 void
-switchChannel(Ptr<WifiNetDevice> dev, uint16_t operatingChannel,
+switchChannel_attr(Ptr<WifiNetDevice> dev, uint16_t operatingChannel,
         WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20);
+
+void
+setTxPower_attr(Ptr<WifiNetDevice> dev, double txPowerDbm);
 
 
 class Scanner {
@@ -158,6 +161,10 @@ public:
 std::shared_ptr<Scanner>
 CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChannels, std::string id="");
 
+using chan_t = uint16_t;
+using txp_t = uint16_t;
+using ApRrmResult = std::pair<chan_t, txp_t>;
+using RrmResults = std::map<Mac48Address, ApRrmResult>;
 
 class LCCSAlgo {
 public:
@@ -220,6 +227,18 @@ class RRMGreedyAlgo {
     void PrintIfaceAirData(GroupState& groupState, Mac48Address bssid);
 
     public:
+
+    std::map<Mac48Address, ApRrmResult> rrmResults;
+
+    ApRrmResult GetApRrmResult(const Mac48Address& bssid) const {
+        return rrmResults.at(bssid);
+    }
+
+    RrmResults GetRrmResults() const {
+        return rrmResults;
+    }
+
+    void updateRrmResults(GroupState& groupState);
 
     void Decide();
 
