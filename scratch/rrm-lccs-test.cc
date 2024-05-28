@@ -224,7 +224,7 @@ doScanning(int scanningApIdx) {
 
     Ptr<Node> scannerWifiNode = apNodes.Get(scanningApIdx);
     vector<uint16_t> operatingChannels{1, 6, 11};
-    auto scanner = CreateScannerForNode(scannerWifiNode, operatingChannels);
+    auto scanner = createScannerForNode(scannerWifiNode, operatingChannels);
     scanner->setAfterScanCallback<void, const Scanner*>(
             std::function<void(const Scanner*)>(LCCSAlgo::Decide), &(*scanner));
 

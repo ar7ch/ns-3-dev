@@ -279,6 +279,40 @@ void LCCSAlgo::Decide(const Scanner* const scanner) {
 // (that contains info about device and corresponding scanner)
 static map<string, std::shared_ptr<Scanner>> scannerByTraceContext;
 
+static map<Mac48Address, RxPhyInfo> RssiRecords;
+
+void
+staMonitorSniffer(
+        std::string context, Ptr<const Packet> p,
+        uint16_t channelFreqMhz,
+        WifiTxVector txVector,
+        MpduInfo aMpdu,
+        SignalNoiseDbm signalNoise,
+        uint16_t staId) {
+    Ptr<Packet> packet = p->Copy();
+    WifiMacHeader hdr;
+    packet->RemoveHeader(hdr);
+    if (hdr.GetAddr1().IsBroadcast() || !hdr.IsFromDs()) {
+        return;
+    }
+    auto rssiRecord = RssiRecords[hdr.GetAddr1()];
+    rssiRecord.rssi += signalNoise.signal;
+    rssiRecord.noise += signalNoise.noise;
+    rssiRecord.snr += (double) signalNoise.signal - signalNoise.noise;
+    rssiRecord.n += 1;
+    RssiRecords[hdr.GetAddr1()] = rssiRecord;
+    //
+    // std::stringstream headerRA; headerRA << hdr.GetAddr1();
+    // cout << "MAC: " << headerRA.str() << " RSSI: " << signalNoise.signal << " dBm" << ", noise: " << signalNoise.noise << " dBm" << endl;
+}
+
+std::map<Mac48Address, RxPhyInfo> getRssiRecords() {
+    return RssiRecords;
+}
+
+void eraseRssiRecords() {
+    RssiRecords.clear();
+}
 
 
 void
@@ -290,6 +324,9 @@ monitorSniffer(
         SignalNoiseDbm signalNoise,
         uint16_t staId) {
 
+    if (scannerByTraceContext.count(context) == 0) {
+        return;
+    }
     std::shared_ptr<Scanner> scanner = scannerByTraceContext[context];
     if (!scanner->inMonitorMode()) {
         SIM_LOG_DEBUG("Not in monitor mode, ignoring the frame");
@@ -359,6 +396,19 @@ CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChanne
     scannerByTraceContext[scanApTraceStr] = scanner;
     Config::Connect(scanApTraceStr, MakeCallback(&monitorSniffer));
     return scanner;
+}
+
+void
+CreateScannerForStaNode(Ptr<Node> staWifiNode) {
+
+    Ptr<WifiNetDevice> staWifiNetDev = getWifiNd(staWifiNode);
+    std::stringstream ss;
+    ss << "/NodeList/" << staWifiNode->GetId()
+        << "/DeviceList/" << staWifiNetDev->GetIfIndex()
+        << "/$ns3::WifiNetDevice/Phy/MonitorSnifferRx";
+    string scanApTraceStr = ss.str();
+    // scannerByTraceContext[scanApTraceStr] = scanner;
+    Config::Connect(scanApTraceStr, MakeCallback(&staMonitorSniffer));
 }
 
 template<typename ReturnType, typename... Args>
@@ -550,7 +600,7 @@ void
 RRMGreedyAlgo::updateRrmResults(GroupState& groupState) {
     for (auto& [bssid, ifaceData] : groupState) {
         rrmResults[bssid] = {ifaceData.channel, ifaceData.txPowerDbm + ifaceData.txDiff};
-        NS_LOG_LOGIC("RRM result for " << bssid << ": ch=" << rrmResults[bssid].first << " txp=" << rrmResults[bssid].second);
+        NS_LOG_DEBUG("RRM result for " << bssid << ": ch=" << rrmResults[bssid].first << " txp=" << rrmResults[bssid].second);
     }
 }
 
@@ -693,13 +743,13 @@ void RRMGreedyAlgo::AddApScandata(const Scanner *scanner) {
     Mac48Address bssid = scanner->GetDevice()->GetMac()->GetAddress();
     auto dev = devices[bssid];
     if (!isScanDataStale(dev->scanDataTimestamp)) {
-        SIM_LOG_LOGIC(
+        SIM_LOG_DEBUG(
                 "bssid " << bssid <<
                 ": using scandata from timestamp " << dev->scanDataTimestamp);
         scandata[bssid] = dev->GetKnownAps();
         scandataTimestamp[bssid] = dev->scanDataTimestamp;
     } else {
-        SIM_LOG_LOGIC("bssid " << bssid << ": scandata is too old");
+        SIM_LOG_ERROR("bssid " << bssid << ": scandata is too old");
         assert(false && "scandata is too old");
     }
     scandata[bssid] = scanner->GetKnownAps();
@@ -713,7 +763,7 @@ void RRMGreedyAlgo::AddApScandata_s(RRMGreedyAlgo *rrmgreedy, Scanner *scanner) 
     assert (rrmgreedy->devices.count(bssid) > 0 && "bssid not found in devices");
     auto dev = rrmgreedy->devices[bssid];
     if (!rrmgreedy->isScanDataStale(dev->scanDataTimestamp)) {
-        SIM_LOG_LOGIC(
+        SIM_LOG_DEBUG(
                 "bssid " << bssid <<
                 ": using scandata from timestamp " << dev->scanDataTimestamp);
         rrmgreedy->scandata[bssid] = dev->GetKnownAps();

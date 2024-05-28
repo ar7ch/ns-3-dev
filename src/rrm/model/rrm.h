@@ -12,6 +12,7 @@
 
 #define SIM_LOG_LOGIC(x) do { NS_LOG_LOGIC(std::fixed << std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
 #define SIM_LOG_DEBUG(x) do { NS_LOG_DEBUG(std::fixed << std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
+#define SIM_LOG_ERROR(x) do { NS_LOG_ERROR(std::fixed << std::setprecision(7) << Simulator::Now().GetSeconds() << "s: " << x ); } while(0)
 
 
 
@@ -158,8 +159,20 @@ public:
     uint16_t getOperatingChannel();
 };
 
+struct RxPhyInfo {
+    double rssi = 0.0;
+    double noise = 0.0;
+    double snr = 0.0;
+    int n = 0;
+    Mac48Address src;
+};
+
 std::shared_ptr<Scanner>
 CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChannels, std::string id="");
+std::map<Mac48Address, RxPhyInfo> getRssiRecords();
+void eraseRssiRecords();
+
+void CreateScannerForStaNode(Ptr<Node> staWifiNode);
 
 using chan_t = uint16_t;
 using txp_t = uint16_t;
