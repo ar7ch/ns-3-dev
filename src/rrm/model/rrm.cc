@@ -76,6 +76,13 @@ assembleChannelSettings(uint16_t channel, uint16_t width, string band) {
 }
 
 void
+setTxPower_attr(WifiPhyHelper& wifiPhy, double txPowerDbm) {
+        wifiPhy.Set("TxPowerStart", DoubleValue(txPowerDbm));
+        wifiPhy.Set("TxPowerEnd", DoubleValue(txPowerDbm));
+        wifiPhy.Set("TxPowerLevels", UintegerValue(1));
+}
+
+void
 setTxPower_attr(Ptr<WifiNetDevice> dev, double txPowerDbm) {
     Ptr<WifiPhy> phy = dev->GetPhy();
     phy->SetTxPowerStart(txPowerDbm);
@@ -131,6 +138,27 @@ switchChannel_attr(Ptr<WifiNetDevice> dev, uint16_t operatingChannel, WifiPhyBan
         assembleChannelSettings(operatingChannel, width, bandStr))
     );
     // assert(phy->GetOperatingChannel().GetNumber() == operatingChannel);
+}
+
+void
+switchChannel_attr(WifiPhyHelper& wifiPhy, uint16_t operatingChannel,
+        WifiPhyBand band, uint16_t width) {
+    string bandStr;
+    switch(band) {
+        case WIFI_PHY_BAND_2_4GHZ:
+            assert(operatingChannel >= 1 && operatingChannel <= 14);
+            bandStr = "BAND_2_4GHZ";
+            break;
+        case WIFI_PHY_BAND_5GHZ:
+            assert(operatingChannel >= 36 && operatingChannel <= 165);
+            bandStr = "BAND_5GHZ";
+            break;
+        default:
+            assert(false);
+    }
+    wifiPhy.Set("ChannelSettings", StringValue(
+        assembleChannelSettings(operatingChannel, width, bandStr))
+    );
 }
 
 Ptr<WifiNetDevice>
@@ -734,7 +762,7 @@ RRMGreedyAlgo::Decide() {
     NS_LOG_LOGIC("New group state:");
     PrintGroupState(groupState);
     NS_LOG_LOGIC("=====");
-    NS_LOG_LOGIC("6. Updating APs configuration DISABLED, NO CHANGES APPLIED");
+    NS_LOG_LOGIC("6. Saving results");
     // updateAPsConfig(groupState);
     updateRrmResults(groupState);
 }

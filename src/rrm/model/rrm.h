@@ -4,6 +4,7 @@
 #include "ns3/core-module.h"
 #include "ns3/node.h"
 #include "ns3/wifi-net-device.h"
+#include "ns3/wifi-helper.h"
 #include "ns3/wifi-mac.h"
 #include <iostream>
 #include <functional>
@@ -56,6 +57,10 @@ switchChannel_event(Ptr<WifiNetDevice> dev, uint16_t newOperatingChannel,
 
 void
 switchChannel_attr(Ptr<WifiNetDevice> dev, uint16_t operatingChannel,
+        WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20);
+
+void
+switchChannel_attr(WifiPhyHelper& wifiPhy, uint16_t operatingChannel,
         WifiPhyBand band=WIFI_PHY_BAND_2_4GHZ, uint16_t width=20);
 
 void
@@ -176,8 +181,8 @@ void CreateScannerForStaNode(Ptr<Node> staWifiNode);
 
 using chan_t = uint16_t;
 using txp_t = uint16_t;
-using ApRrmResult = std::pair<chan_t, txp_t>;
-using RrmResults = std::map<Mac48Address, ApRrmResult>;
+using ApRrmAssignment = std::pair<chan_t, txp_t>;
+using ApsRrmAssignments = std::map<Mac48Address, ApRrmAssignment>;
 
 class LCCSAlgo {
 public:
@@ -233,7 +238,8 @@ class RRMGreedyAlgo {
     }
 
     bool isScanDataStale(double scandataTimestamp) const {
-        return (Simulator::Now().GetSeconds() - scandataTimestamp) > scandataStaleTime_s;
+        return false;
+        // return (Simulator::Now().GetSeconds() - scandataTimestamp) > scandataStaleTime_s;
     }
     void PrintGroupState(GroupState& groupState);
     // void PrintScanData(Scanner::ScanData& scandata);
@@ -241,13 +247,13 @@ class RRMGreedyAlgo {
 
     public:
 
-    std::map<Mac48Address, ApRrmResult> rrmResults;
+    std::map<Mac48Address, ApRrmAssignment> rrmResults;
 
-    ApRrmResult GetApRrmResult(const Mac48Address& bssid) const {
+    ApRrmAssignment GetApRrmResult(const Mac48Address& bssid) const {
         return rrmResults.at(bssid);
     }
 
-    RrmResults GetRrmResults() const {
+    ApsRrmAssignments GetRrmResults() const {
         return rrmResults;
     }
 
