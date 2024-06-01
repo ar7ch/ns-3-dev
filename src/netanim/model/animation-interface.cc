@@ -1760,7 +1760,7 @@ AnimationInterface::GetPosition(Ptr<Node> n)
 {
     if (m_nodeLocation.find(n->GetId()) == m_nodeLocation.end())
     {
-        NS_FATAL_ERROR("Node:" << n->GetId() << " not found in Location table");
+        NS_FATAL_ERROR("Node:" << n->GetId() << n->GetDevice(0)->GetAddress() << " not found in Location table");
     }
     return m_nodeLocation[n->GetId()];
 }

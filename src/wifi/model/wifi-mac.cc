@@ -1876,6 +1876,13 @@ WifiMac::GetMaxBaBufferSize(std::optional<Mac48Address> address) const
     {
         return 256;
     }
+    if (!(address ? GetHtSupported(*address) : GetHtSupported())) {
+        NS_LOG_ERROR("adddress " << address.value_or(Mac48Address::GetBroadcast()) << " is not HT supported");
+    }
+    // else {
+    //
+    //     // NS_LOG_ERROR("adddress " << address.value_or(Mac48Address::GetBroadcast()) << " supports HT");
+    // }
     NS_ASSERT(address ? GetHtSupported(*address) : GetHtSupported());
     return 64;
 }
