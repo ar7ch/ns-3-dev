@@ -68,22 +68,6 @@ static bool g_logic = false;
 
 #define XML_NEWLINE ""
 
-void printRssiRecords() {
-    cout << "====================================== RSSI records ==============================================" << endl;
-    std::cout << std::left << std::setw(20) << "mac"
-              << std::setw(10) << "avgRSSI"
-              << std::setw(10) << "avgNoise"
-              << std::setw(10) << "avgSNR" << endl;
-    for (auto [mac, rxPhy] : getRssiRecords()) {
-        std::stringstream macStr; macStr << mac;
-        std::cout << std::left << std::setw(20) << macStr.str()
-                  << std::setw(10) << rxPhy.rssi / rxPhy.n
-                  << std::setw(10) << rxPhy.noise / rxPhy.n
-                  << std::setw(10) << rxPhy.snr / rxPhy.n
-                  << endl;
-    }
-    cout << "==================================================================================================" << endl;
-}
 
 // double
 // printThroughputResults(Ptr<FlowMonitor> monitor, FlowMonitorHelper& flowmon,
@@ -940,6 +924,11 @@ public:
 
     const size_t n_aps;
 
+    static map<string, Mac48Address> traceStr2mac;
+    static map<Mac48Address, RxPhyInfo> mac2SignalStats;
+    static SimulationCase* currentInst;
+
+
     SimulationCase(
             const vector<uint16_t>& apChannelAllocation,
             const vector<uint16_t>& apStaAllocation,
@@ -968,9 +957,13 @@ public:
             wifiPhy.SetChannel(wifiChannel.Create());
             addressHelper.SetBase("1.1.1.0", "255.255.255.0");
 
+            traceStr2mac.clear();
+            mac2SignalStats.clear();
+            currentInst = this;
+            sta2bssid.clear();
+
             setupAps();
             setupStas();
-            eraseRssiRecords();
             Ipv4GlobalRoutingHelper::PopulateRoutingTables();
             anim = std::make_unique<AnimationInterface>(animFileName);
             setupAnim();
@@ -998,6 +991,59 @@ public:
             newRrmAlloc(rrmResults)
         {}
     };
+
+
+    map<Mac48Address, Mac48Address> sta2bssid;
+
+    Mac48Address getApBssid(Mac48Address staMac) {
+        return sta2bssid.at(staMac);
+    }
+
+    static void
+    staSniffer(
+            std::string context, Ptr<const Packet> p,
+            uint16_t channelFreqMhz,
+            WifiTxVector txVector,
+            MpduInfo aMpdu,
+            SignalNoiseDbm signalNoise,
+            uint16_t staId) {
+        Ptr<Packet> packet = p->Copy();
+        WifiMacHeader hdr;
+        packet->RemoveHeader(hdr);
+        if (hdr.GetAddr1().IsBroadcast() || !hdr.IsFromDs()) {
+            return;
+        }
+        if (traceStr2mac.find(context) == traceStr2mac.end()) {
+            cout << "context \'" + context + "\' not found in traceStr2mac" << endl;
+        }
+        Mac48Address rxMac = traceStr2mac.at(context);
+        Mac48Address ra = hdr.GetAddr1();
+        Mac48Address ta = hdr.GetAddr2();
+        auto signalStats = mac2SignalStats[rxMac];
+        if ((ra == rxMac) && (ta == currentInst->getApBssid(rxMac))) {
+            signalStats.rssi += signalNoise.signal;
+            signalStats.noise += signalNoise.noise;
+            signalStats.snr += (double) signalNoise.signal - signalNoise.noise;
+            signalStats.n += 1;
+        }
+        mac2SignalStats[rxMac] = signalStats;
+    }
+
+
+    void
+    createScannerForStaNode(Ptr<Node> staWifiNode) {
+
+        Ptr<WifiNetDevice> staWifiNetDev = getWifiNd(staWifiNode);
+        std::stringstream ss;
+        ss << "/NodeList/" << staWifiNode->GetId()
+            << "/DeviceList/" << staWifiNetDev->GetIfIndex()
+            << "/$ns3::WifiNetDevice/Phy/MonitorSnifferRx";
+        string scanApTraceStr = ss.str();
+        // cout << scanApTraceStr << "->" << getWifiMacStr(staWifiNetDev->GetMac()->GetAddress()) << endl;
+        traceStr2mac[scanApTraceStr] = staWifiNetDev->GetMac()->GetAddress();
+        // scannerByTraceContext[scanApTraceStr] = scanner;
+        Config::Connect(scanApTraceStr, MakeCallback(&staSniffer));
+    }
 
     SimulationCaseResults
     runSimulation(bool doRrm) {
@@ -1095,12 +1141,12 @@ public:
     void setupApAnim (Ptr<Node> apNode_i, int i) const {
         anim->UpdateNodeColor(apNode_i, (50 + (20*i)) % 256, 0, 0); // red
         Ptr<WifiNetDevice> wifiNd_i = getWifiNd(apNode_i);
-        string bssidStr_s = getWifiMacStr(apNode_i);
+        string bssidStr_s = getWifiMacStr(apNode_i).substr(14);
         auto wifiPhy_i = wifiNd_i->GetPhy();
         std::stringstream apName;
         apName <<
             "AP-" << i << " " << bssidStr_s <<
-            "CH: "   << +wifiPhy_i->GetOperatingChannel().GetNumber() <<
+            " CH: "   << +wifiPhy_i->GetOperatingChannel().GetNumber() <<
             " txp: " << wifiPhy_i->GetTxPowerStart();
         anim->UpdateNodeDescription(apNode_i, apName.str());
     }
@@ -1209,8 +1255,11 @@ public:
             stack.Install(staNodes[i]);
             staInterfaces[i] = addressHelper.Assign(staDevs[i]);
             setupStaTrafficFlow(staNodes[i], staInterfaces[i]);
+            Mac48Address bssid = getWifiNd(apNodes.Get(i))->GetMac()->GetAddress();
             for (size_t k = 0; k < staNodes[i].GetN(); k++) {
-                CreateScannerForStaNode(staNodes[i].Get(k));
+                Mac48Address staMac = getWifiNd(staNodes[i].Get(k))->GetMac()->GetAddress();
+                sta2bssid[staMac] = bssid;
+                createScannerForStaNode(staNodes[i].Get(k));
             }
         }
     }
@@ -1328,10 +1377,31 @@ public:
         return (totalRxBytes * 8 / 1000.0 / 1000.0) / (trafficEndTime - trafficStartTime);
     }
 
+    void printRssiRecords() {
+        cout << "====================================== RSSI records ==============================================" << endl;
+        std::cout << std::left << std::setw(20) << "mac"
+                  << std::setw(10) << "avgRSSI"
+                  << std::setw(10) << "avgNoise"
+                  << std::setw(10) << "avgSNR" << endl;
+        for (auto [mac, rxPhy] : mac2SignalStats) {
+            std::stringstream macStr; macStr << mac;
+            std::cout << std::left << std::setw(20) << macStr.str()
+                      << std::setw(10) << rxPhy.rssi / rxPhy.n
+                      << std::setw(10) << rxPhy.noise / rxPhy.n
+                      << std::setw(10) << rxPhy.snr / rxPhy.n
+                      << endl;
+        }
+        cout << "==================================================================================================" << endl;
+    }
+
     ~SimulationCase() {
         Simulator::Destroy();
     }
 };
+
+map<string, Mac48Address> SimulationCase::traceStr2mac;
+map<Mac48Address, RxPhyInfo> SimulationCase::mac2SignalStats;
+SimulationCase* SimulationCase::currentInst;
 
 int main(int argc, char* argv[]) {
     CommandLine cmd(__FILE__);

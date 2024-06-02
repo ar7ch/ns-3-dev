@@ -307,40 +307,14 @@ void LCCSAlgo::Decide(const Scanner* const scanner) {
 // (that contains info about device and corresponding scanner)
 static map<string, std::shared_ptr<Scanner>> scannerByTraceContext;
 
-static map<Mac48Address, RxPhyInfo> RssiRecords;
 
-void
-staMonitorSniffer(
-        std::string context, Ptr<const Packet> p,
-        uint16_t channelFreqMhz,
-        WifiTxVector txVector,
-        MpduInfo aMpdu,
-        SignalNoiseDbm signalNoise,
-        uint16_t staId) {
-    Ptr<Packet> packet = p->Copy();
-    WifiMacHeader hdr;
-    packet->RemoveHeader(hdr);
-    if (hdr.GetAddr1().IsBroadcast() || !hdr.IsFromDs()) {
-        return;
-    }
-    auto rssiRecord = RssiRecords[hdr.GetAddr1()];
-    rssiRecord.rssi += signalNoise.signal;
-    rssiRecord.noise += signalNoise.noise;
-    rssiRecord.snr += (double) signalNoise.signal - signalNoise.noise;
-    rssiRecord.n += 1;
-    RssiRecords[hdr.GetAddr1()] = rssiRecord;
-    //
-    // std::stringstream headerRA; headerRA << hdr.GetAddr1();
-    // cout << "MAC: " << headerRA.str() << " RSSI: " << signalNoise.signal << " dBm" << ", noise: " << signalNoise.noise << " dBm" << endl;
-}
-
-std::map<Mac48Address, RxPhyInfo> getRssiRecords() {
-    return RssiRecords;
-}
-
-void eraseRssiRecords() {
-    RssiRecords.clear();
-}
+// std::map<Mac48Address, RxPhyInfo> getRssiRecords() {
+//     return RssiRecords;
+// }
+//
+// void eraseRssiRecords() {
+//     RssiRecords.clear();
+// }
 
 
 void
@@ -426,21 +400,6 @@ CreateScannerForNode(Ptr<Node> scannerWifiNode, vector<uint16_t> operatingChanne
     return scanner;
 }
 
-static map<string, Mac48Address> nodeId2mac;
-
-void
-CreateScannerForStaNode(Ptr<Node> staWifiNode) {
-
-    Ptr<WifiNetDevice> staWifiNetDev = getWifiNd(staWifiNode);
-    std::stringstream ss;
-    ss << "/NodeList/" << staWifiNode->GetId()
-        << "/DeviceList/" << staWifiNetDev->GetIfIndex()
-        << "/$ns3::WifiNetDevice/Phy/MonitorSnifferRx";
-    string scanApTraceStr = ss.str();
-    nodeId2mac[scanApTraceStr] = staWifiNetDev->GetMac()->GetAddress();
-    // scannerByTraceContext[scanApTraceStr] = scanner;
-    Config::Connect(scanApTraceStr, MakeCallback(&staMonitorSniffer));
-}
 
 template<typename ReturnType, typename... Args>
 std::shared_ptr<Scanner>
