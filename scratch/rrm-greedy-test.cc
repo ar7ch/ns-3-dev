@@ -34,6 +34,7 @@
 #include "ns3/ap-wifi-mac.h"
 #include "ns3/internet-module.h"
 #include "ns3/udp-echo-helper.h"
+#include "ns3/gnuplot-helper.h"
 
 #include "ns3/wifi-net-device.h"
 #include "ns3/packet-sink-helper.h"
@@ -68,132 +69,375 @@ static bool g_logic = false;
 
 #define XML_NEWLINE ""
 
-
-// double
-// printThroughputResults(Ptr<FlowMonitor> monitor, FlowMonitorHelper& flowmon,
-//         double udpStartTime, double udpEndTime,
-//         map<Ipv4Address, Mac48Address>& ip2mac) {
-//     double totalRxBytes = 0.0;
-//     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
-//     FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
-//     std::set<Ipv4Address> visitedIps;
-//     cout << "====================================== Throughput results ==============================================" << endl;
-//     std::cout << std::left << std::setw(10) << "MAC1"
-//               << std::setw(10) << "MAC2"
-//               << std::setw(10) << "TxPkt"
-//               << std::setw(15) << "TxBytes"
-//               << std::setw(20) << "TxOffered (Mbps)"
-//               << std::setw(10) << "RxPkt"
-//               << std::setw(15) << "RxBytes"
-//               << std::setw(15) << "Thrpt (Mbps)"
-//               << std::endl;
-//     for (auto [flowId, flowStats] : stats)
-//     {
-//         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flowId);
-//         Ipv4Address srcAddr = t.sourceAddress;
-//         Ipv4Address dstAddr = t.destinationAddress;
-//         totalRxBytes += flowStats.rxBytes;
-//
-//         if (visitedIps.count(srcAddr)) {
-//             continue;
-//         }
-//         visitedIps.insert(dstAddr);
-//         // Mac48Address mac1 = ip2mac.at(t.sourceAddress);
-//         // Mac48Address mac2 = ip2mac.at(t.destinationAddress);
-//         auto printStats =  [&](Mac48Address& mac1, Mac48Address& mac2) {
-//             double txOffered = (flowStats.rxBytes * 8 / 1000.0 / 1000.0) / (udpEndTime - udpStartTime);
-//             double throughput = (flowStats.rxBytes * 8 / 1000.0 / 1000.0) / (udpEndTime - udpStartTime);
-//
-//             std::stringstream mac1Str; mac1Str << mac1; string mac1Str_s = mac1Str.str().substr(14);
-//             std::stringstream mac2Str; mac2Str << mac2; string mac2Str_s = mac2Str.str().substr(14);
-//             std::cout << std::left << std::setw(10) << mac1Str_s
-//                 << std::setw(10) << mac2Str_s
-//                 << std::setw(10) << flowStats.txPackets
-//                 << std::setw(15) << flowStats.txBytes
-//                 << std::setw(20) << std::fixed << std::setprecision(4) << txOffered
-//                 << std::setw(10) << flowStats.rxPackets
-//                 << std::setw(15) << flowStats.rxBytes
-//                 << std::setw(15) << std::fixed << std::setprecision(4) << throughput
-//                 << std::endl;
-//         };
-//         printStats(ip2mac.at(srcAddr), ip2mac.at(dstAddr));
-//         printStats(ip2mac.at(dstAddr), ip2mac.at(srcAddr));
-//     }
-//     cout << "==================================================================================================" << endl;
-//     return (totalRxBytes * 8 / 1000.0 / 1000.0) / (udpEndTime - udpStartTime);
-// }
-
-// void printSimulationParams(NodeContainer& apNodes, vector<NodeContainer>& staNodes) {
-//     cout << "============== Simulation parameters ==============================" << endl;
-//     cout << "=================== APs ===========================================" << endl;
-//     std::cout << std::left
-//         << std::setw(10) << "AP"
-//         << std::setw(10) << "Channel"
-//         << std::setw(25) << "SSID"
-//         << std::setw(20) << "BSSID"
-//         << std::endl;
-//
-//     // Print data
-//     for (auto it = apNodes.Begin(); it != apNodes.End(); ++it) {
-//         int i = it - apNodes.Begin();
-//         std::stringstream bssidStr; bssidStr << getWifiNd(*it)->GetMac()->GetAddress(); string bssidStr_s = bssidStr.str();
-//         std::cout << std::left
-//             << std::setw(10) << i
-//             << std::setw(10) << +getWifiNd(*it)->GetPhy()->GetOperatingChannel().GetNumber()
-//             << std::setw(25) << getWifiNd(*it)->GetMac()->GetSsid().PeekString()
-//             << std::setw(20) << bssidStr_s
-//             << std::endl;
-//     }
-//     cout << "=================== STAs ===========================================" << endl;
-//     // Print headers
-//     std::cout << std::left
-//               << std::setw(10) << "STA"
-//               << std::setw(25) << "SSID"
-//               << std::setw(10) << "Channel"
-//               << std::setw(20) << "MAC"
-//               << std::endl;
-//
-//     // Print data
-//     for (const auto& staNodes_ap_i : staNodes) {
-//         for (auto it = staNodes_ap_i.Begin(); it != staNodes_ap_i.End(); ++it) {
-//             int i = (it - staNodes_ap_i.Begin()) + staNodes_ap_i.GetN();
-//             std::stringstream bssidStr; bssidStr << getWifiNd(*it)->GetMac()->GetAddress(); string bssidStr_s = bssidStr.str();
-//             std::cout << std::left
-//                       << std::setw(10) << i
-//                       << std::setw(25) << getWifiNd(*it)->GetMac()->GetSsid().PeekString()
-//                       << std::setw(10) << +getWifiNd(*it)->GetPhy()->GetOperatingChannel().GetNumber()
-//                       << std::setw(20) << bssidStr_s
-//                       << std::endl;
-//         }
-//     }
-//     cout << "====================================================================" << endl;
-// }
-
-// std::shared_ptr<RRMGreedyAlgo>
-// setupApScanners(NodeContainer& apNodes,
-//         vector<std::shared_ptr<Scanner>>& scanners,
-//         const vector<uint16_t>& channelsToScan) {
-//     std::shared_ptr<RRMGreedyAlgo> rrmgreedy = std::make_shared<RRMGreedyAlgo>(channelsToScan);
-//     for (size_t i = 0; i < apNodes.GetN(); i++) { auto apNode = apNodes.Get(i);
-//         std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
-//         scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
-//                 std::function<void(RRMGreedyAlgo*, Scanner*)>(
-//                     RRMGreedyAlgo::AddApScandata_s
-//                 ),
-//                 &(*rrmgreedy),
-//                 &(*scanner)
-//         );
-//         const double apScanStart_s = 2.5 + (0.01*i);
-//         Simulator::Schedule(Seconds(apScanStart_s), &Scanner::Scan, &(*scanner));
-//         scanners.push_back(scanner);
-//     }
-//     rrmgreedy->AddDevices(scanners);
-//     return rrmgreedy;
-// }
+static const uint32_t g_packetSize = 1024;
+static const double g_packetInterval = 0.005;
 
 
+class NodeStatistics
+{
+  public:
+    /**
+     * \brief Constructor.
+     *
+     * \param aps Access points
+     * \param stas WiFi Stations.
+     */
+    NodeStatistics(NetDeviceContainer aps, NetDeviceContainer stas);
 
+    /**
+     * \brief Collects the statistics at a given time.
+     *
+     * \param time Time at which the statistics are collected.
+     */
+    void CheckStatistics(double time);
 
+    /**
+     * \brief Callback called by WifiNetDevice/Phy/PhyTxBegin.
+     *
+     * \param path The trace path.
+     * \param packet The sent packet.
+     * \param powerW The Tx power.
+     */
+    void PhyCallback(std::string path, Ptr<const Packet> packet, double powerW);
+    /**
+     * \brief Callback called by PacketSink/Rx.
+     *
+     * \param path The trace path.
+     * \param packet The received packet.
+     * \param from The sender address.
+     */
+    void RxCallback(std::string path, Ptr<const Packet> packet, const Address& from);
+    /**
+     * \brief Callback called by WifiNetDevice/RemoteStationManager/x/PowerChange.
+     *
+     * \param path The trace path.
+     * \param oldPower Old Tx power.
+     * \param newPower Actual Tx power.
+     * \param dest Destination of the transmission.
+     */
+    void PowerCallback(std::string path, double oldPower, double newPower, Mac48Address dest);
+    /**
+     * \brief Callback called by WifiNetDevice/RemoteStationManager/x/RateChange.
+     *
+     * \param path The trace path.
+     * \param oldRate Old rate.
+     * \param newRate Actual rate.
+     * \param dest Destination of the transmission.
+     */
+    void RateCallback(std::string path, DataRate oldRate, DataRate newRate, Mac48Address dest);
+    /**
+     * \brief Callback called by YansWifiPhy/State/State.
+     *
+     * \param path The trace path.
+     * \param init Time when the state started.
+     * \param duration Amount of time we've been in (or will be in) the state.
+     * \param state The state.
+     */
+    void StateCallback(std::string path, Time init, Time duration, WifiPhyState state);
+
+    /**
+     * \brief Get the Throughput output data
+     *
+     * \return the Throughput output data.
+     */
+    Gnuplot2dDataset GetDatafile();
+    /**
+     * \brief Get the Power output data.
+     *
+     * \return the Power output data.
+     */
+    Gnuplot2dDataset GetPowerDatafile();
+    /**
+     * \brief Get the IDLE state output data.
+     *
+     * \return the IDLE state output data.
+     */
+    Gnuplot2dDataset GetIdleDatafile();
+    /**
+     * \brief Get the BUSY state output data.
+     *
+     * \return the BUSY state output data.
+     */
+    Gnuplot2dDataset GetBusyDatafile();
+    /**
+     * \brief Get the TX state output data.
+     *
+     * \return the TX state output data.
+     */
+    Gnuplot2dDataset GetTxDatafile();
+    /**
+     * \brief Get the RX state output data.
+     *
+     * \return the RX state output data.
+     */
+    Gnuplot2dDataset GetRxDatafile();
+
+    /**
+     * \brief Get the Busy time.
+     *
+     * \return the busy time.
+     */
+    double GetBusyTime() const;
+
+  private:
+    /// Time, DataRate pair vector.
+    typedef std::vector<std::pair<Time, DataRate>> TxTime;
+    /**
+     * \brief Setup the WifiPhy object.
+     *
+     * \param phy The WifiPhy to setup.
+     */
+    void SetupPhy(Ptr<WifiPhy> phy);
+    /**
+     * \brief Get the time at which a given datarate has been recorded.
+     *
+     * \param rate The datarate to search.
+     * \return the time.
+     */
+    Time GetCalcTxTime(DataRate rate);
+
+    std::map<Mac48Address, double> m_currentPower;  //!< Current Tx power for each sender.
+    std::map<Mac48Address, DataRate> m_currentRate; //!< Current Tx rate for each sender.
+    uint32_t m_bytesTotal;                          //!< Number of received bytes.
+    double m_totalEnergy;                           //!< Energy used.
+    double m_totalTime;                             //!< Time spent.
+    double busyTime;                                //!< BUSY time.
+    double idleTime;                                //!< IDLE time.
+    double txTime;                                  //!< TX time.
+    double rxTime;                                  //!< RX time.
+    double m_totalBusyTime;                         //!< Total time in BUSY state.
+    double m_totalIdleTime;                         //!< Total time in IDLE state.
+    double m_totalTxTime;                           //!< Total time in TX state.
+    double m_totalRxTime;                           //!< Total time in RX state.
+    TxTime m_timeTable;                             //!< Time, DataRate table.
+    Gnuplot2dDataset m_output;                      //!< Throughput output data.
+    Gnuplot2dDataset m_output_power;                //!< Power output data.
+    Gnuplot2dDataset m_output_idle;                 //!< IDLE output data.
+    Gnuplot2dDataset m_output_busy;                 //!< BUSY output data.
+    Gnuplot2dDataset m_output_rx;                   //!< RX output data.
+    Gnuplot2dDataset m_output_tx;                   //!< TX output data.
+};
+
+NodeStatistics::NodeStatistics(NetDeviceContainer aps, NetDeviceContainer stas)
+{
+    Ptr<NetDevice> device = aps.Get(0);
+    Ptr<WifiNetDevice> wifiDevice = DynamicCast<WifiNetDevice>(device);
+    Ptr<WifiPhy> phy = wifiDevice->GetPhy();
+    SetupPhy(phy);
+    DataRate dataRate = DataRate(phy->GetDefaultMode().GetDataRate(phy->GetChannelWidth()));
+    double power = phy->GetTxPowerEnd();
+    for (uint32_t j = 0; j < stas.GetN(); j++)
+    {
+        Ptr<NetDevice> staDevice = stas.Get(j);
+        Ptr<WifiNetDevice> wifiStaDevice = DynamicCast<WifiNetDevice>(staDevice);
+        Mac48Address addr = wifiStaDevice->GetMac()->GetAddress();
+        m_currentPower[addr] = power;
+        m_currentRate[addr] = dataRate;
+    }
+    m_currentRate[Mac48Address("ff:ff:ff:ff:ff:ff")] = dataRate;
+    m_totalEnergy = 0;
+    m_totalTime = 0;
+    busyTime = 0;
+    idleTime = 0;
+    txTime = 0;
+    rxTime = 0;
+    m_totalBusyTime = 0;
+    m_totalIdleTime = 0;
+    m_totalTxTime = 0;
+    m_totalRxTime = 0;
+    m_bytesTotal = 0;
+    m_output.SetTitle("Throughput Mbits/s");
+    m_output_idle.SetTitle("Idle Time");
+    m_output_busy.SetTitle("Busy Time");
+    m_output_rx.SetTitle("RX Time");
+    m_output_tx.SetTitle("TX Time");
+}
+
+void
+NodeStatistics::SetupPhy(Ptr<WifiPhy> phy)
+{
+    for (const auto& mode : phy->GetModeList())
+    {
+        WifiTxVector txVector;
+        txVector.SetMode(mode);
+        txVector.SetPreambleType(WIFI_PREAMBLE_LONG);
+        txVector.SetChannelWidth(phy->GetChannelWidth());
+        DataRate dataRate(mode.GetDataRate(phy->GetChannelWidth()));
+        Time time = phy->CalculateTxDuration(g_packetSize, txVector, phy->GetPhyBand());
+        NS_LOG_DEBUG(mode.GetUniqueName() << " " << time.GetSeconds() << " " << dataRate);
+        m_timeTable.emplace_back(time, dataRate);
+    }
+}
+
+Time
+NodeStatistics::GetCalcTxTime(DataRate rate)
+{
+    for (auto i = m_timeTable.begin(); i != m_timeTable.end(); i++)
+    {
+        if (rate == i->second)
+        {
+            return i->first;
+        }
+    }
+    NS_ASSERT(false);
+    return Seconds(0);
+}
+
+void
+NodeStatistics::PhyCallback(std::string path, Ptr<const Packet> packet, double powerW)
+{
+    WifiMacHeader head;
+    packet->PeekHeader(head);
+    Mac48Address dest = head.GetAddr1();
+
+    if (head.GetType() == WIFI_MAC_DATA)
+    {
+        m_totalEnergy += pow(10.0, m_currentPower[dest] / 10.0) *
+                         GetCalcTxTime(m_currentRate[dest]).GetSeconds();
+        m_totalTime += GetCalcTxTime(m_currentRate[dest]).GetSeconds();
+    }
+}
+
+void
+NodeStatistics::PowerCallback(std::string path, double oldPower, double newPower, Mac48Address dest)
+{
+    m_currentPower[dest] = newPower;
+}
+
+void
+NodeStatistics::RateCallback(std::string path,
+                             DataRate oldRate,
+                             DataRate newRate,
+                             Mac48Address dest)
+{
+    m_currentRate[dest] = newRate;
+}
+
+void
+NodeStatistics::StateCallback(std::string path, Time init, Time duration, WifiPhyState state)
+{
+    if (state == WifiPhyState::CCA_BUSY)
+    {
+        busyTime += duration.GetSeconds();
+        m_totalBusyTime += duration.GetSeconds();
+    }
+    else if (state == WifiPhyState::IDLE)
+    {
+        idleTime += duration.GetSeconds();
+        m_totalIdleTime += duration.GetSeconds();
+    }
+    else if (state == WifiPhyState::TX)
+    {
+        txTime += duration.GetSeconds();
+        m_totalTxTime += duration.GetSeconds();
+    }
+    else if (state == WifiPhyState::RX)
+    {
+        rxTime += duration.GetSeconds();
+        m_totalRxTime += duration.GetSeconds();
+    }
+}
+
+void
+NodeStatistics::RxCallback(std::string path, Ptr<const Packet> packet, const Address& from)
+{
+    m_bytesTotal += packet->GetSize();
+}
+
+void
+NodeStatistics::CheckStatistics(double time)
+{
+    double mbs = ((m_bytesTotal * 8.0) / (1000000 * time));
+    m_bytesTotal = 0;
+    double atp = m_totalEnergy / time;
+    m_totalEnergy = 0;
+    m_totalTime = 0;
+    m_output_power.Add((Simulator::Now()).GetSeconds(), atp);
+    m_output.Add((Simulator::Now()).GetSeconds(), mbs);
+
+    m_output_idle.Add((Simulator::Now()).GetSeconds(), idleTime * 100);
+    m_output_busy.Add((Simulator::Now()).GetSeconds(), busyTime * 100);
+    m_output_tx.Add((Simulator::Now()).GetSeconds(), txTime * 100);
+    m_output_rx.Add((Simulator::Now()).GetSeconds(), rxTime * 100);
+    busyTime = 0;
+    idleTime = 0;
+    txTime = 0;
+    rxTime = 0;
+
+    Simulator::Schedule(Seconds(time), &NodeStatistics::CheckStatistics, this, time);
+}
+
+Gnuplot2dDataset
+NodeStatistics::GetDatafile()
+{
+    return m_output;
+}
+
+Gnuplot2dDataset
+NodeStatistics::GetPowerDatafile()
+{
+    return m_output_power;
+}
+
+Gnuplot2dDataset
+NodeStatistics::GetIdleDatafile()
+{
+    return m_output_idle;
+}
+
+Gnuplot2dDataset
+NodeStatistics::GetBusyDatafile()
+{
+    return m_output_busy;
+}
+
+Gnuplot2dDataset
+NodeStatistics::GetRxDatafile()
+{
+    return m_output_rx;
+}
+
+Gnuplot2dDataset
+NodeStatistics::GetTxDatafile()
+{
+    return m_output_tx;
+}
+
+double
+NodeStatistics::GetBusyTime() const
+{
+    return m_totalBusyTime + m_totalRxTime;
+}
+
+/**
+ * Callback called by WifiNetDevice/RemoteStationManager/x/PowerChange.
+ *
+ * \param path The trace path.
+ * \param oldPower Old Tx power.
+ * \param newPower Actual Tx power.
+ * \param dest Destination of the transmission.
+ */
+void
+PowerCallback(std::string path, double oldPower, double newPower, Mac48Address dest)
+{
+    NS_LOG_INFO((Simulator::Now()).GetSeconds()
+                << " " << dest << " Old power=" << oldPower << " New power=" << newPower);
+}
+
+/**
+ * \brief Callback called by WifiNetDevice/RemoteStationManager/x/RateChange.
+ *
+ * \param path The trace path.
+ * \param oldRate Old rate.
+ * \param newRate Actual rate.
+ * \param dest Destination of the transmission.
+ */
+void
+RateCallback(std::string path, DataRate oldRate, DataRate newRate, Mac48Address dest)
+{
+    NS_LOG_INFO((Simulator::Now()).GetSeconds()
+                << " " << dest << " Old rate=" << oldRate << " New rate=" << newRate);
+}
 
 std::string
 getWifiMacStr(Ptr<Node> node) {
@@ -209,671 +453,6 @@ getWifiMacStr(Mac48Address mac) {
     return macStr.str();
 }
 
-// void setupStaTrafficFlow(NodeContainer& staNodes, Ipv4InterfaceContainer& staInterfaces,
-//         const double trafficStartTime, const double trafficEndTime) {
-//     auto setupUdpEchoClientServer = [](Ptr<Node> nodeServer,
-//                                         Ptr<Node> nodeClient,
-//                                         Ipv4InterfaceContainer& staInterfaces,
-//                                         const double trafficStartTime,
-//                                         const double trafficEndTime,
-//                                         const uint16_t echoPort=9,
-//                                         double maxPackets = 0, // 0 means unlimited
-//                                         double packetInterval = 0.005,
-//                                         int packetSize = 1024) {
-//         UdpEchoServerHelper echoServer(echoPort);
-//         ApplicationContainer serverApps = echoServer.Install(nodeServer);
-//
-//         UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
-//         echoClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
-//         echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
-//         echoClient.SetAttribute("PacketSize", UintegerValue(packetSize));
-//         NS_LOG_LOGIC("UDP packets rate: " << ((packetSize*8 / packetInterval) / 1000 / 1000) << " Mbps");
-//         ApplicationContainer clientApps = echoClient.Install(nodeClient);
-//
-//         serverApps.Start(Seconds(trafficStartTime));
-//         clientApps.Start(Seconds(trafficStartTime));
-//         serverApps.Stop(Seconds(trafficEndTime));
-//         clientApps.Stop(Seconds(trafficEndTime));
-//         return std::make_pair(serverApps, clientApps);
-//     };
-//     if (staNodes.GetN() < 2) {
-//         return;
-//     }
-//     for (size_t i = 0; i < staNodes.GetN()-1; i++) {
-//         Ptr<Node> nodeServer = staNodes.Get(i);
-//         Ptr<Node> nodeClient = staNodes.Get(i+1);
-//         setupUdpEchoClientServer(staNodes.Get(i), staNodes.Get(i+1), staInterfaces, trafficStartTime, trafficEndTime);
-//         cout << setw(20) << getWifiMacStr(nodeServer) << setw(20) << getWifiMacStr(nodeClient) << setw(20) << endl;
-//     }
-// }
-//
-// void
-// setupStas(vector<NodeContainer>& staNodes, vector<NetDeviceContainer>& staDevs, vector<Ipv4InterfaceContainer>& staInterfaces,
-//         vector<uint16_t>& apChannelAllocation,
-//         double trafficStartTime, double trafficEndTime,
-//         map<Ipv4Address, Mac48Address>& ip2mac, map<Mac48Address, Ipv4Address>& mac2ip,
-//         WifiHelper& wifi, WifiPhyHelper& wifiPhy, WifiMacHelper& wifiMac, MobilityHelper& mobility,
-//             InternetStackHelper& stack, AnimationInterface& anim, Ipv4AddressHelper& addressHelper,
-//         const WifiPhyBand initialBand = WIFI_PHY_BAND_2_4GHZ, const uint16_t initialWidth = 20
-//         ) {
-//     auto setupSTAAnimation = [&anim, &staInterfaces, &ip2mac, &mac2ip](NodeContainer staNodes_ap_i, int i) {
-//         for (size_t k = 0; k < staNodes_ap_i.GetN(); k++) {
-//             Ptr<Node> sta_i_k = staNodes_ap_i.Get(k);
-//             anim.UpdateNodeColor(sta_i_k, 0, (100 + 50*(i)) %  256, 0); // green
-//             // anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
-//             auto [ipv4, _] = staInterfaces[i].Get(k);
-//             std::stringstream staname;
-//             Ipv4Address staIp = ipv4->GetAddress(1, 0).GetLocal();
-//             Mac48Address staMac = getWifiNd(sta_i_k)->GetMac()->GetAddress();
-//             ip2mac[staIp] = staMac;
-//             mac2ip[staMac] = staIp;
-//             std::stringstream staMacStr_ss;
-//             staMacStr_ss << staMac;
-//             string staMacStr = staMacStr_ss.str().substr(14);
-//             staname << "STA " << i << "-" << k << XML_NEWLINE
-//                 << "(" << staIp << ")" << staMacStr << XML_NEWLINE;
-//
-//             anim.UpdateNodeDescription(sta_i_k, staname.str());
-//
-//         }
-//     };
-//     cout << setw(20) << "SRV" << setw(20) << "CLI" << setw(20) << endl;;
-//     for (int i = 0; i < staNodes.size(); i++) {
-//         packetSocket.Install(staNodes[i]);
-//         std::string ssid = "ssid-" + std::to_string(i);
-//         switchChannel_attr(wifiPhy, apChannelAllocation[i]);
-//         wifiMac.SetType("ns3::StaWifiMac",
-//                         "ActiveProbing", BooleanValue(true),
-//                         "Ssid", SsidValue(Ssid(ssid)),
-//                         "QosSupported", BooleanValue(false)
-//         );
-//         staDevs[i] = wifi.Install(wifiPhy, wifiMac, staNodes[i]);
-//         stack.Install(staNodes[i]);
-//         staInterfaces[i] = addressHelper.Assign(staDevs[i]);
-//         setupStaTrafficFlow(staNodes[i], staInterfaces[i], trafficStartTime, trafficEndTime);
-//         setupSTAAnimation(staNodes[i], i);
-//         for (size_t k = 0; k < staNodes[i].GetN(); k++) {
-//             CreateScannerForStaNode(staNodes[i].Get(k));
-//         }
-//     }
-// }
-
-
-// std::pair<
-//     vector<std::shared_ptr<Scanner>>,
-//     std::shared_ptr<RRMGreedyAlgo>
-// >
-// doInitialSim(vector<uint16_t>& apChannelAllocation,
-//            vector<uint16_t>& apStaAllocation,
-//            vector<uint16_t> channelsToScan={1, 6, 11},
-//            uint16_t initialWidth = 20,
-//            WifiPhyBand initialBand = WIFI_PHY_BAND_2_4GHZ) {
-//     // Packet::EnablePrinting();
-//     RngSeedManager::SetSeed(2);
-//     const int n_aps = apChannelAllocation.size();
-//     WifiHelper wifi;
-//     MobilityHelper mobility;
-//     vector<NodeContainer> staNodes(n_aps);
-//     NodeContainer apNodes;
-//
-//     vector<NetDeviceContainer> staDevs(n_aps);
-//     NetDeviceContainer apDevs;
-//     PacketSocketHelper packetSocket;
-//
-//     // give packet socket powers to nodes.
-//     for (int i = 0; i < n_aps; i++) {
-//         staNodes[i].Create(apStaAllocation[i]);
-//         packetSocket.Install(staNodes[i]);
-//     }
-//     apNodes.Create(n_aps);
-//     packetSocket.Install(apNodes);
-//
-//     Vector startPos{3.0, 3.0, 0.0};
-//     // setup mobility for APs
-//     vector<Vector> apPosRelativeVectors = {
-//         {0.0, 0.0, 0.0},
-//         {4.0, 0.0, 0.0},
-//         {0.0, 7.0, 0.0},
-//         {5.0, 5.0, 0.0},
-//     };
-//
-//     for (auto& v : apPosRelativeVectors) {
-//         v = v+startPos;
-//     }
-//
-//     Ptr<ListPositionAllocator> listPos = CreateObject<ListPositionAllocator>();
-//     for (auto& v : apPosRelativeVectors) {
-//         listPos->Add(v);
-//     }
-//     mobility.SetPositionAllocator(listPos);
-//     // mobility.SetPositionAllocator(
-//     //     "ns3::GridPositionAllocator",
-//     //     "MinX", DoubleValue(0.0),
-//     //     "MinY", DoubleValue(0.0),
-//     //     "DeltaX", DoubleValue(5.0),
-//     //     "DeltaY", DoubleValue(5.0),
-//     //     "GridWidth", UintegerValue(2),
-//     //     "LayoutType", StringValue("RowFirst")
-//     // );
-//     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-//     mobility.Install(apNodes);
-//
-//     // setup mobility for STAs: distribute them randomly around each AP
-//     for (int i = 0; i < n_aps; i++) {
-//         std::string x = std::to_string(apPosRelativeVectors[i].x);
-//         std::string y = std::to_string(apPosRelativeVectors[i].y);
-//         std::string z = std::to_string(apPosRelativeVectors[i].z);
-//         // std::string rho = "7.0";
-//         mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
-//                                       "X", StringValue(x),
-//                                       "Y", StringValue(y),
-//                                       "Z", StringValue(z),
-//                                       "Rho", StringValue("ns3::UniformRandomVariable[Min=1|Max=1.5]") //
-//         );
-//         mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-//         mobility.Install(staNodes[i]);
-//     }
-//
-//     // setup wifi
-//     wifi.SetStandard(WIFI_STANDARD_80211n);
-//     uint32_t rtsThreshold = 65535;
-//     // // std::string staManager = "ns3::MinstrelHtWifiManager";
-//     // std::string apManager = "ns3::MinstrelHtWifiManager";
-//     // wifi.SetRemoteStationManager(apManager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
-//     // std::ostringstream ossControlMode;
-//     // ossControlMode << "OfdmRate" << "18" << "Mbps";
-//     //
-//     // std::ostringstream ossDataMode;
-//     // ossDataMode << "OfdmRate" << "54" << "Mbps";
-//     wifi.SetRemoteStationManager("ns3::IdealWifiManager",
-//             "RtsCtsThreshold", UintegerValue(rtsThreshold)
-//             // ,
-//             // "DataMode",
-//             // StringValue(ossDataMode.str()),
-//             // "ControlMode",
-//             // StringValue(ossControlMode.str())
-//     );
-//
-//     // Set guard interval
-//     wifi.ConfigHtOptions("ShortGuardIntervalSupported", BooleanValue(true));
-//
-//
-//     WifiMacHelper wifiMac;
-//     // setup wifi channel helper
-//     YansWifiPhyHelper wifiPhy;
-//     YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
-//     wifiPhy.SetChannel(wifiChannel.Create());
-//
-//     InternetStackHelper stack;
-//     Ipv4AddressHelper address;
-//     address.SetBase("1.1.1.0", "255.255.255.0");
-//     vector<Ipv4InterfaceContainer> staInterfaces(n_aps);
-//
-//     double initialApTxPower_dbm = 20.0;
-//     // setup APs
-//
-//     // setup animation
-//     AnimationInterface anim("rrmgreedy-before.xml");
-//     auto setupApAnim = [&anim](Ptr<Node> apNode_i, int i) {
-//         anim.UpdateNodeColor(apNode_i, (50 + (20*i)) % 256, 0, 0); // red
-//         // anim.UpdateNodeSize(apNode->GetId(), 1.0, 1.0);
-//         std::stringstream apName;
-//         Mac48Address bssid = getWifiNd(apNode_i)->GetMac()->GetAddress();
-//         std::stringstream bssidStr;
-//         bssidStr << bssid;
-//         string bssidStr_s = bssidStr.str().substr(14);
-//         apName << "AP-" << i << " " << bssidStr_s << XML_NEWLINE
-//             << "CH: " << +getWifiNd(apNode_i)->GetPhy()->GetOperatingChannel().GetNumber()
-//             << " txp: " << getWifiNd(apNode_i)->GetPhy()->GetTxPowerStart();
-//         anim.UpdateNodeDescription(apNode_i, apName.str());
-//     };
-//
-//
-//     for (int i = 0; i < n_aps; i++) {
-//         setupAp(apNodes.Get(i), apDevs, "ssid-" + std::to_string(i));
-//         setupApAnim(apNodes.Get(i), i);
-//     }
-//
-//     do {
-//         // mobility.Install(apNodes);
-//         stack.Install(apNodes);
-//         Ipv4InterfaceContainer apInterfaces = address.Assign(apDevs);
-//     } while(false);
-//
-//     map<Ipv4Address, Mac48Address> ip2mac;
-//     map<Mac48Address, Ipv4Address> mac2ip;
-//
-//     constexpr double simulationStartTime = 0.0;
-//     constexpr double simulationEndTime = 10.0;
-//     constexpr double udpStartTime = simulationStartTime + 0.5;
-//     constexpr double udpEndTime = simulationEndTime;
-//     auto setupUdpEchoClientServer = [](Ptr<Node> nodeServer,
-//                                         Ptr<Node> nodeClient,
-//                                         Ipv4InterfaceContainer& staInterfaces,
-//                                         uint16_t echoPort=9) {
-//         UdpEchoServerHelper echoServer(echoPort);
-//         ApplicationContainer serverApps = echoServer.Install(nodeServer);
-//
-//         UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
-//         double maxPackets = 0; // 0 means unlimited
-//         double packetInterval = 0.005; // 0.005;
-//         int packetSize = 1024;
-//         echoClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
-//         echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
-//         echoClient.SetAttribute("PacketSize", UintegerValue(packetSize));
-//         NS_LOG_LOGIC("UDP packets rate: " << ((packetSize*8 / packetInterval) / 1000 / 1000) << " Mbps");
-//         ApplicationContainer clientApps = echoClient.Install(nodeClient);
-//
-//         serverApps.Start(Seconds(udpStartTime));
-//         clientApps.Start(Seconds(udpStartTime));
-//         serverApps.Stop(Seconds(udpEndTime));
-//         clientApps.Stop(Seconds(udpEndTime));
-//         return std::make_pair(serverApps, clientApps);
-//     };
-//
-//
-//     auto setupSta = [&](NodeContainer& sta_i_nodes, NetDeviceContainer& sta_i_devs, string ssid) {
-//         int initialChannel = 1;
-//         TupleValue<UintegerValue, UintegerValue, EnumValue<WifiPhyBand>, UintegerValue> channelValue;
-//         channelValue.Set(WifiPhy::ChannelTuple {initialChannel, initialWidth, initialBand, 0});
-//         wifiPhy.Set("ChannelSettings", channelValue);
-//         wifiMac.SetType("ns3::StaWifiMac",
-//                         "ActiveProbing", BooleanValue(true),
-//                         "Ssid", SsidValue(Ssid(ssid)),
-//                         "QosSupported", BooleanValue(false)
-//         );
-//         sta_i_devs = wifi.Install(wifiPhy, wifiMac, sta_i_nodes);
-//     };
-//     // setup stas.
-//
-//     auto setupSTAAnimation = [&anim, &staInterfaces, &ip2mac, &mac2ip](NodeContainer staNodes_ap_i, int i) {
-//         for (size_t k = 0; k < staNodes_ap_i.GetN(); k++) {
-//             Ptr<Node> sta_i_k = staNodes_ap_i.Get(k);
-//             anim.UpdateNodeColor(sta_i_k, 0, (100 + 50*(i)) %  256, 0); // green
-//             // anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
-//             auto [ipv4, _] = staInterfaces[i].Get(k);
-//             std::stringstream staname;
-//             Ipv4Address staIp = ipv4->GetAddress(1, 0).GetLocal();
-//             Mac48Address staMac = getWifiNd(sta_i_k)->GetMac()->GetAddress();
-//             ip2mac[staIp] = staMac;
-//             mac2ip[staMac] = staIp;
-//             std::stringstream staMacStr_ss;
-//             staMacStr_ss << staMac;
-//             string staMacStr = staMacStr_ss.str().substr(14);
-//             staname << "STA " << i << "-" << k << XML_NEWLINE
-//                 << "(" << staIp << ")" << staMacStr << XML_NEWLINE;
-//
-//             anim.UpdateNodeDescription(sta_i_k, staname.str());
-//
-//         }
-//     };
-//
-//     eraseRssiRecords();
-//     for (int i = 0; i < n_aps; i++) {
-//
-//         setupSta(staNodes[i], staDevs[i], "ssid-" + std::to_string(i));
-//         // mobility.Install(staNodes[i]);
-//         stack.Install(staNodes[i]);
-//         staInterfaces[i] = address.Assign(staDevs[i]);
-//         setupUdpEchoClientServer(staNodes[i].Get(0), staNodes[i].Get(1), staInterfaces[i]);
-//         setupSTAAnimation(staNodes[i], i);
-//         for (size_t k = 0; k < staNodes[i].GetN(); k++) {
-//             CreateScannerForStaNode(staNodes[i].Get(k));
-//         }
-//     }
-//
-//     FlowMonitorHelper flowmon;
-//     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
-//
-//
-//     /* Populate routing table */
-//     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
-//
-//     // simulation
-//     Simulator::Stop(Seconds(udpEndTime));
-//
-//     printSimulationParams(apNodes, staNodes);
-//     vector<std::shared_ptr<Scanner>> scanners;
-//     std::shared_ptr<RRMGreedyAlgo> rrmgreedy = std::make_shared<RRMGreedyAlgo>(channelsToScan);
-//
-//     for (size_t i = 0; i < apNodes.GetN(); i++) {
-//         auto apNode = apNodes.Get(i);
-//         std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
-//         // std::shared_ptr<Scanner> scanner;
-//         scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
-//                 std::function<void(RRMGreedyAlgo*, Scanner*)>(
-//                     RRMGreedyAlgo::AddApScandata_s
-//                 ),
-//                 &(*rrmgreedy),
-//                 &(*scanner)
-//         );
-//         const double apScanStart_s = 2.5 + (0.01*i);
-//         Simulator::Schedule(Seconds(apScanStart_s), &Scanner::Scan, &(*scanner));
-//         scanners.push_back(scanner);
-//     }
-//     rrmgreedy->AddDevices(scanners);
-//
-//
-//     Simulator::Schedule(Seconds(7.0), [&rrmgreedy](){rrmgreedy->Decide();});
-//
-//     anim.EnablePacketMetadata(true);
-//     anim.EnableIpv4L3ProtocolCounters(Seconds(0), Seconds(10)); // Optional
-//     anim.EnableWifiMacCounters(Seconds(0), Seconds(10)); // Optional
-//     anim.EnableWifiPhyCounters(Seconds(0), Seconds(10)); // Optional
-//     anim.EnableIpv4RouteTracking("routingtable-rrmgreedy.xml",
-//                                  Seconds(0),
-//                                  Seconds(10),
-//                                  Seconds(0.25));         // Optional
-//     Simulator::Run();
-//
-//     // print metrics
-//     printRssiRecords();
-//     monitor->CheckForLostPackets();
-//     double totalThroughput = printThroughputResults(monitor, flowmon, udpStartTime, udpEndTime, ip2mac);
-//     std::cout << "Total group throughput before RRM: " << totalThroughput << "Mbps" << std::endl;
-//     return std::make_pair(scanners, rrmgreedy);
-// }
-//
-// vector<std::shared_ptr<Scanner>>
-// doRrmImprovedSim(
-//            vector<uint16_t>& apChannelAllocation,
-//            vector<uint16_t>& apTxpAllocationDbm,
-//            vector<uint16_t>& apStaAllocation,
-//            RrmResults& rrmResults,
-//            vector<uint16_t> channelsToScan={1, 6, 11}) {
-//     const int n_aps = apChannelAllocation.size();
-//
-//     WifiHelper wifi;
-//     MobilityHelper mobility;
-//     vector<NodeContainer> staNodes(n_aps);
-//     NodeContainer apNodes;
-//     // NodeContainer scanAp;
-//
-//     vector<NetDeviceContainer> staDevs(n_aps);
-//     NetDeviceContainer apDevs;
-//     PacketSocketHelper packetSocket;
-//
-//     const uint16_t initialWidth = 20;
-//     const WifiPhyBand initialBand = WIFI_PHY_BAND_2_4GHZ;
-//
-//     // give packet socket powers to nodes.
-//     for (int i = 0; i < n_aps; i++) {
-//         staNodes[i].Create(apStaAllocation[i]);
-//         packetSocket.Install(staNodes[i]);
-//     }
-//     apNodes.Create(n_aps);
-//     packetSocket.Install(apNodes);
-//
-//     Vector startPos{3.0, 3.0, 0.0};
-//     // setup mobility for APs
-//     vector<Vector> apPosRelativeVectors = {
-//         {0.0, 0.0, 0.0},
-//         {4.0, 0.0, 0.0},
-//         {0.0, 7.0, 0.0},
-//         {5.0, 5.0, 0.0},
-//     };
-//
-//     for (auto& v : apPosRelativeVectors) {
-//         v = v+startPos;
-//     }
-//
-//     Ptr<ListPositionAllocator> listPos = CreateObject<ListPositionAllocator>();
-//     for (auto& v : apPosRelativeVectors) {
-//         listPos->Add(v);
-//     }
-//     mobility.SetPositionAllocator(listPos);
-//     // mobility.SetPositionAllocator(
-//     //     "ns3::GridPositionAllocator",
-//     //     "MinX", DoubleValue(0.0),
-//     //     "MinY", DoubleValue(0.0),
-//     //     "DeltaX", DoubleValue(5.0),
-//     //     "DeltaY", DoubleValue(5.0),
-//     //     "GridWidth", UintegerValue(2),
-//     //     "LayoutType", StringValue("RowFirst")
-//     // );
-//     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-//     mobility.Install(apNodes);
-//
-//     // setup mobility for STAs: distribute them randomly around each AP
-//     for (int i = 0; i < n_aps; i++) {
-//         std::string x = std::to_string(apPosRelativeVectors[i].x);
-//         std::string y = std::to_string(apPosRelativeVectors[i].y);
-//         std::string z = std::to_string(apPosRelativeVectors[i].z);
-//         // std::string rho = "7.0";
-//         mobility.SetPositionAllocator("ns3::RandomDiscPositionAllocator",
-//                                       "X", StringValue(x),
-//                                       "Y", StringValue(y),
-//                                       "Z", StringValue(z),
-//                                       "Rho", StringValue("ns3::UniformRandomVariable[Min=1|Max=1.5]") //
-//         );
-//         mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-//         // mobility.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
-//         //                           "Bounds",
-//         //                           RectangleValue(Rectangle(x+2, 50, -25, 50)));
-//         mobility.Install(staNodes[i]);
-//
-//     }
-//
-//     // setup mobility for STAs
-//
-//     // setup wifi
-//     wifi.SetStandard(WIFI_STANDARD_80211n);
-//     uint32_t rtsThreshold = 65535;
-//     // std::string staManager = "ns3::MinstrelHtWifiManager";
-//     // std::string apManager = "ns3::MinstrelHtWifiManager";
-//     // wifi.SetRemoteStationManager(apManager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
-//     wifi.SetRemoteStationManager("ns3::IdealWifiManager",
-//             "RtsCtsThreshold", UintegerValue(rtsThreshold)
-//             // ,
-//             // "DataMode",
-//             // StringValue(ossDataMode.str()),
-//             // "ControlMode",
-//             // StringValue(ossControlMode.str())
-//             // "RtsCtsThreshold", UintegerValue(rtsThreshold)
-//     );
-//     // std::ostringstream ossControlMode; ossControlMode << "OfdmRate" << "18" << "Mbps";
-//     //
-//     // std::ostringstream ossDataMode; ossDataMode << "OfdmRate" << "54" << "Mbps";
-//     // wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-//     //         "DataMode",
-//     //         StringValue(ossDataMode.str()),
-//     //         "ControlMode",
-//     //         StringValue(ossControlMode.str())
-//     // );
-//
-//     // Set guard interval
-//     wifi.ConfigHtOptions("ShortGuardIntervalSupported", BooleanValue(true));
-//
-//     WifiMacHelper wifiMac;
-//     // setup wifi channel helper
-//     YansWifiPhyHelper wifiPhy;
-//     YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
-//     wifiPhy.SetChannel(wifiChannel.Create());
-//
-//     InternetStackHelper stack;
-//     Ipv4AddressHelper address;
-//     address.SetBase("1.1.1.0", "255.255.255.0");
-//     vector<Ipv4InterfaceContainer> staInterfaces(n_aps);
-//
-//     double initialApTxPower_dbm = 20.0;
-//     // setup APs
-//     auto setupAp = [&](Ptr<Node> apNode_i, NetDeviceContainer& apDev_i, string ssid) {
-//         wifiMac.SetType("ns3::ApWifiMac",
-//                 "Ssid", SsidValue(Ssid(ssid)),
-//                 "QosSupported", BooleanValue(false)
-//         );
-//         wifiPhy.Set("TxPowerStart", DoubleValue(initialApTxPower_dbm));
-//         wifiPhy.Set("TxPowerEnd", DoubleValue(initialApTxPower_dbm));
-//         wifiPhy.Set("TxPowerLevels", UintegerValue(1));
-//         apDev_i = wifi.Install(wifiPhy, wifiMac, apNode_i);
-//         Mac48Address bssid = getWifiNd(apNode_i)->GetMac()->GetAddress();
-//         auto [chan_i, txp_i] = rrmResults.at(bssid);
-//         NS_LOG_DEBUG("AP " << bssid << " switched to RrmResult channel " << chan_i << " and txp " << txp_i);
-//         Ptr<WifiNetDevice> wifiNd_i = getWifiNd(apNode_i);
-//         switchChannel_attr(wifiNd_i, chan_i, initialBand, initialWidth);
-//         setTxPower_attr(wifiNd_i, txp_i);
-//
-//     };
-//
-//     // setup animation
-//     AnimationInterface anim("rrmgreedy-after.xml");
-//     auto setupApAnim = [&anim](Ptr<Node> apNode_i, int i) {
-//         anim.UpdateNodeColor(apNode_i, (50 + (20*i)) % 256, 0, 0); // red
-//         // anim.UpdateNodeSize(apNode->GetId(), 1.0, 1.0);
-//         std::stringstream apName;
-//         Mac48Address bssid = getWifiNd(apNode_i)->GetMac()->GetAddress();
-//         std::stringstream bssidStr;
-//         bssidStr << bssid;
-//         string bssidStr_s = bssidStr.str().substr(14);
-//         apName << "AP-" << i << " " << bssidStr_s << XML_NEWLINE
-//             << " CH=" << +getWifiNd(apNode_i)->GetPhy()->GetOperatingChannel().GetNumber()
-//             << " txp=" << getWifiNd(apNode_i)->GetPhy()->GetTxPowerStart();
-//         anim.UpdateNodeDescription(apNode_i, apName.str());
-//     };
-//
-//
-//     for (int i = 0; i < n_aps; i++) {
-//         setupAp(apNodes.Get(i), apDevs, "ssid-" + std::to_string(i));
-//         setupApAnim(apNodes.Get(i), i);
-//     }
-//
-//     do {
-//         // mobility.Install(apNodes);
-//         stack.Install(apNodes);
-//         Ipv4InterfaceContainer apInterfaces = address.Assign(apDevs);
-//     } while(false);
-//
-//     map<Ipv4Address, Mac48Address> ip2mac;
-//     map<Mac48Address, Ipv4Address> mac2ip;
-//
-//     constexpr double simulationStartTime = 0.0;
-//     constexpr double simulationEndTime = 10.0;
-//     constexpr double udpStartTime = simulationStartTime + 0.5;
-//     constexpr double udpEndTime = simulationEndTime;
-//     auto setupUdpEchoClientServer = [](Ptr<Node> nodeServer,
-//                                         Ptr<Node> nodeClient,
-//                                         Ipv4InterfaceContainer& staInterfaces,
-//                                         uint16_t echoPort=9) {
-//         UdpEchoServerHelper echoServer(echoPort);
-//         ApplicationContainer serverApps = echoServer.Install(nodeServer);
-//
-//         UdpEchoClientHelper echoClient(staInterfaces.GetAddress(0), echoPort);
-//         double maxPackets = 0; // 0 means unlimited
-//         double packetInterval = 0.005; // 0.005;
-//         int packetSize = 1024;
-//         echoClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
-//         echoClient.SetAttribute("Interval", TimeValue(Seconds(packetInterval)));
-//         echoClient.SetAttribute("PacketSize", UintegerValue(packetSize));
-//         NS_LOG_LOGIC("UDP packets rate: " << ((packetSize*8 / packetInterval) / 1000 / 1000) << " Mbps");
-//         ApplicationContainer clientApps = echoClient.Install(nodeClient);
-//
-//         serverApps.Start(Seconds(udpStartTime));
-//         clientApps.Start(Seconds(udpStartTime));
-//         serverApps.Stop(Seconds(udpEndTime));
-//         clientApps.Stop(Seconds(udpEndTime));
-//         return std::make_pair(serverApps, clientApps);
-//     };
-//
-//
-//     auto setupSta = [&](NodeContainer& sta_i_nodes, NetDeviceContainer& sta_i_devs, string ssid) {
-//         int initialChannel = 1;
-//         TupleValue<UintegerValue, UintegerValue, EnumValue<WifiPhyBand>, UintegerValue> channelValue;
-//         channelValue.Set(WifiPhy::ChannelTuple {initialChannel, initialWidth, initialBand, 0});
-//         wifiPhy.Set("ChannelSettings", channelValue);
-//         wifiMac.SetType("ns3::StaWifiMac",
-//                         "ActiveProbing", BooleanValue(true),
-//                         "Ssid", SsidValue(Ssid(ssid)),
-//                         "QosSupported", BooleanValue(false)
-//         );
-//         sta_i_devs = wifi.Install(wifiPhy, wifiMac, sta_i_nodes);
-//     };
-//     // setup stas.
-//
-//     auto setupSTAAnimation = [&anim, &staInterfaces, &ip2mac, &mac2ip](NodeContainer staNodes_ap_i, int i) {
-//         for (size_t k = 0; k < staNodes_ap_i.GetN(); k++) {
-//             Ptr<Node> sta_i_k = staNodes_ap_i.Get(k);
-//             anim.UpdateNodeColor(sta_i_k, 0, (100 + 50*(i)) %  256, 0); // green
-//             // anim.UpdateNodeSize(staNodes_ap_i.Get(k)->GetId(), 0.4, 0.4);
-//             auto [ipv4, _] = staInterfaces[i].Get(k);
-//             std::stringstream staname;
-//             Ipv4Address staIp = ipv4->GetAddress(1, 0).GetLocal();
-//             Mac48Address staMac = getWifiNd(sta_i_k)->GetMac()->GetAddress();
-//             ip2mac[staIp] = staMac;
-//             mac2ip[staMac] = staIp;
-//             std::stringstream staMacStr_ss;
-//             staMacStr_ss << staMac;
-//             string staMacStr = staMacStr_ss.str().substr(14);
-//             staname << "STA " << i << "-" << k << XML_NEWLINE
-//                 << "(" << staIp << ")" << staMacStr;
-//
-//             anim.UpdateNodeDescription(sta_i_k, staname.str());
-//
-//         }
-//     };
-//
-//     eraseRssiRecords();
-//     for (int i = 0; i < n_aps; i++) {
-//         setupSta(staNodes[i], staDevs[i], "ssid-" + std::to_string(i));
-//         // mobility.Install(staNodes[i]);
-//         stack.Install(staNodes[i]);
-//         staInterfaces[i] = address.Assign(staDevs[i]);
-//         setupUdpEchoClientServer(staNodes[i].Get(0), staNodes[i].Get(1), staInterfaces[i]);
-//         setupSTAAnimation(staNodes[i], i);
-//         for (size_t k = 0; k < staNodes[i].GetN(); k++) {
-//             CreateScannerForStaNode(staNodes[i].Get(k));
-//         }
-//     }
-//
-//     FlowMonitorHelper flowmon;
-//     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
-//
-//     /* Populate routing table */
-//     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
-//
-//     // simulation
-//     Simulator::Stop(Seconds(udpEndTime));
-//     printSimulationParams(apNodes, staNodes);
-//
-//     vector<std::shared_ptr<Scanner>> scanners;
-//
-//     std::shared_ptr<RRMGreedyAlgo> rrmgreedy = std::make_shared<RRMGreedyAlgo>(channelsToScan);
-//
-//     for (size_t i = 0; i < apNodes.GetN(); i++) {
-//         auto apNode = apNodes.Get(i);
-//         std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
-//         // std::shared_ptr<Scanner> scanner;
-//         scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
-//                 std::function<void(RRMGreedyAlgo*, Scanner*)>(
-//                     RRMGreedyAlgo::AddApScandata_s
-//                 ),
-//                 &(*rrmgreedy),
-//                 &(*scanner)
-//         );
-//         const double apScanStart_s = 2.5 + (0.01*i);
-//         Simulator::Schedule(Seconds(apScanStart_s), &Scanner::Scan, &(*scanner));
-//         scanners.push_back(scanner);
-//     }
-//     rrmgreedy->AddDevices(scanners);
-//
-//     // Simulator::Schedule(Seconds(7.0), [&rrmgreedy](){rrmgreedy->Decide();});
-//
-//     anim.EnablePacketMetadata(true);
-//     anim.EnableIpv4L3ProtocolCounters(Seconds(0), Seconds(10)); // Optional
-//     anim.EnableWifiMacCounters(Seconds(0), Seconds(10)); // Optional
-//     anim.EnableWifiPhyCounters(Seconds(0), Seconds(10)); // Optional
-//     anim.EnableIpv4RouteTracking("routingtable-rrmgreedy.xml",
-//                                  Seconds(0),
-//                                  Seconds(10),
-//                                  Seconds(0.25));         // Optional
-//     Simulator::Run();
-//
-//     monitor->CheckForLostPackets();
-//     // print metrics
-//     printRssiRecords();
-//     double totalThroughput = printThroughputResults(monitor, flowmon, udpStartTime, udpEndTime, ip2mac);
-//     std::cout << "Total group throughput after RRM: " << totalThroughput << "Mbps" << std::endl;
-//     return scanners;
-// }
 
 class SimulationCase {
 public:
@@ -905,6 +484,9 @@ public:
     // metrics capture
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor;
+    std::unique_ptr<NodeStatistics> nodeStats;
+    // plotting
+    GnuplotHelper plotHelper;
     // mobility
     MobilityHelper mobility;
     Vector startPos{3.0, 3.0, 0.0};
@@ -938,7 +520,7 @@ public:
             const double simulationEndTime,
             const double trafficStartTime,
             const double trafficEndTime,
-            const std::string animFileName
+            const std::string simCaseName
     ) : apChannelAllocation(apChannelAllocation),
         apTxpAllocationDbm(apTxpAllocationDbm),
         apStaAllocation(apStaAllocation),
@@ -950,9 +532,13 @@ public:
         n_aps(apChannelAllocation.size())
     {
             wifi.SetStandard(WIFI_STANDARD_80211n);
+            std::string phyMode = "ErpOfdmRate54Mbps";        ///< the constant PHY mode string used to transmit frames
             uint32_t rtsThreshold = 65535;
             std::string manager = "ns3::MinstrelHtWifiManager";
             wifi.SetRemoteStationManager(manager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
+            // wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+            //                              "DataMode", StringValue(phyMode),
+            //                              "ControlMode", StringValue(phyMode));
             YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
             wifiPhy.SetChannel(wifiChannel.Create());
             addressHelper.SetBase("1.1.1.0", "255.255.255.0");
@@ -964,8 +550,39 @@ public:
 
             setupAps();
             setupStas();
+
+            NetDeviceContainer allStaDevs;
+            for (auto& staDevs_i : staDevs) {
+                allStaDevs.Add(staDevs_i);
+            }
+
+            nodeStats = std::make_unique<NodeStatistics>(apDevs, allStaDevs);
+
+            do {
+                // Config::Connect("/NodeList/4/ApplicationList/*/$ns3::UdpEchoClient/Rx", MakeCallback(&NodeStatistics::RxCallback, &(*nodeStats)));
+                // Config::Connect("/NodeList/5/ApplicationList/*/$ns3::UdpEchoServer/Rx",
+                //         MakeCallback(&NodeStatistics::RxCallback, &(*nodeStats)));
+                // Register power and rate changes to calculate the Average Transmit Power
+                for (size_t i = 0; i < n_aps; i++) {
+                    uint32_t apNodeId = apNodes.Get(i)->GetId();
+                    auto connectNode = [&](uint32_t nodeId) {
+                        Config::Connect("/NodeList/" + std::to_string(nodeId) + "/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyTxBegin",
+                                MakeCallback(&NodeStatistics::PhyCallback, &(*nodeStats)));
+                        // Register States
+                        Config::Connect(
+                                "/NodeList/" + std::to_string(nodeId) + "/DeviceList/*/$ns3::WifiNetDevice/Phy/$ns3::YansWifiPhy/State/State",
+                                MakeCallback(&NodeStatistics::StateCallback, &(*nodeStats)));
+                    };
+                    connectNode(apNodeId);
+                    for (int k = 0; k < apStaAllocation[i]; k++) {
+                        auto staNode = staNodes[i].Get(k);
+                        connectNode(staNode->GetId());
+                    }
+                }
+                nodeStats->CheckStatistics(1);
+            } while(false);
             Ipv4GlobalRoutingHelper::PopulateRoutingTables();
-            anim = std::make_unique<AnimationInterface>(animFileName);
+            anim = std::make_unique<AnimationInterface>(simCaseName + ".xml");
             setupAnim();
             monitor = flowmon.InstallAll();
             Simulator::Stop(Seconds(trafficEndTime));
@@ -1178,8 +795,8 @@ public:
     void setupUdpEchoClientServer (Ptr<Node> nodeServer, Ptr<Node> nodeClient, Ipv4InterfaceContainer& staInterfaces_i,
             const uint16_t echoPort=9,
             double maxPackets = 0, // 0 means unlimited
-            double packetInterval = 0.05,
-            int packetSize = 1024) const {
+            double packetInterval = g_packetInterval,
+            int packetSize = g_packetSize) const {
         UdpEchoServerHelper echoServer(echoPort);
         ApplicationContainer serverApps = echoServer.Install(nodeServer);
         UdpEchoClientHelper echoClient(staInterfaces_i.GetAddress(0), echoPort);
@@ -1311,12 +928,13 @@ public:
             << std::endl;
 
         // Print data
-        for (const auto& staNodes_ap_i : staNodes) {
+        for (size_t i = 0; i < n_aps; i++) {
+            NodeContainer staNodes_ap_i = staNodes[i];
             for (auto it = staNodes_ap_i.Begin(); it != staNodes_ap_i.End(); ++it) {
-                int i = (it - staNodes_ap_i.Begin()) + staNodes_ap_i.GetN();
+                int k = (it - staNodes_ap_i.Begin());
                 std::stringstream bssidStr; bssidStr << getWifiNd(*it)->GetMac()->GetAddress(); string bssidStr_s = bssidStr.str();
                 std::cout << std::left
-                    << std::setw(10) << i
+                    << std::setw(10) << (std::to_string(i) + "-" + std::to_string(k))
                     << std::setw(25) << getWifiNd(*it)->GetMac()->GetSsid().PeekString()
                     << std::setw(10) << +getWifiNd(*it)->GetPhy()->GetOperatingChannel().GetNumber()
                     << std::setw(20) << bssidStr_s
@@ -1341,6 +959,7 @@ public:
             << std::setw(15) << "RxBytes"
             << std::setw(15) << "Thrpt (Mbps)"
             << std::endl;
+        double timeDiff = (trafficEndTime - trafficStartTime);
         for (auto [flowId, flowStats] : stats)
         {
             Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flowId);
@@ -1354,9 +973,12 @@ public:
             visitedIps.insert(dstAddr);
             // Mac48Address mac1 = ip2mac.at(t.sourceAddress);
             // Mac48Address mac2 = ip2mac.at(t.destinationAddress);
+            timeDiff = (flowStats.timeLastRxPacket.GetSeconds() - flowStats.timeFirstTxPacket.GetSeconds());
+
             auto printStats =  [&](Mac48Address& mac1, Mac48Address& mac2) {
-                double txOffered = (flowStats.rxBytes * 8 / 1000.0 / 1000.0) / (trafficEndTime - trafficStartTime);
-                double throughput = (flowStats.rxBytes * 8 / 1000.0 / 1000.0) / (trafficEndTime - trafficStartTime);
+                // double t = (trafficEndTime - trafficStartTime);
+                double txOffered = (flowStats.rxBytes * 8 / 1000.0 / 1000.0) / timeDiff;
+                double throughput = (flowStats.rxBytes * 8 / 1000.0 / 1000.0) / timeDiff;
 
                 std::stringstream mac1Str; mac1Str << mac1; string mac1Str_s = mac1Str.str().substr(14);
                 std::stringstream mac2Str; mac2Str << mac2; string mac2Str_s = mac2Str.str().substr(14);
@@ -1373,8 +995,9 @@ public:
             printStats(ip2mac.at(srcAddr), ip2mac.at(dstAddr));
             printStats(ip2mac.at(dstAddr), ip2mac.at(srcAddr));
         }
+        cout << "Total busy time: " << nodeStats->GetBusyTime() / (simulationEndTime - simulationStartTime) << endl;
         cout << "==================================================================================================" << endl;
-        return (totalRxBytes * 8 / 1000.0 / 1000.0) / (trafficEndTime - trafficStartTime);
+        return (totalRxBytes * 8 / 1000.0 / 1000.0) / timeDiff;
     }
 
     void printRssiRecords() {
@@ -1467,7 +1090,7 @@ int main(int argc, char* argv[]) {
             10.0,
             0.5,
             10.0,
-            "rrmgreedy-before.xml"
+            "rrmgreedy-before"
     );
     SimulationCase::SimulationCaseResults initialResults = initialSettingsCase->runSimulation(true);
     delete initialSettingsCase;
@@ -1482,7 +1105,7 @@ int main(int argc, char* argv[]) {
             10.0,
             0.5,
             10.0,
-            "rrmgreedy-after.xml"
+            "rrmgreedy-after"
     );
     SimulationCase::SimulationCaseResults withRrm = withRrmCase->runSimulation(false);
 
