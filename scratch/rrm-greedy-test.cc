@@ -70,7 +70,7 @@ static bool g_logic = false;
 #define XML_NEWLINE ""
 
 static const uint32_t g_packetSize = 1024;
-static const double g_packetInterval = 0.05;
+static const double g_packetInterval = 0.005;
 
 
 class NodeStatistics
@@ -522,8 +522,9 @@ public:
             const double simulationEndTime,
             const double trafficStartTime,
             const double trafficEndTime,
-            const std::string simCaseName
-    ) : apChannelAllocation(apChannelAllocation),
+            const std::string simCaseName,
+            std::shared_ptr<RRMGreedyAlgo> rrmalgo) :
+        apChannelAllocation(apChannelAllocation),
         apTxpAllocationDbm(apTxpAllocationDbm),
         apStaAllocation(apStaAllocation),
         channelsToScan(channelsToScan),
@@ -531,16 +532,16 @@ public:
         simulationEndTime(simulationEndTime),
         trafficStartTime(trafficStartTime),
         trafficEndTime(trafficEndTime),
-        n_aps(apChannelAllocation.size())
-    {
+        n_aps(apChannelAllocation.size()) {
+            this->rrmalgo = rrmalgo;
             wifi.SetStandard(WIFI_STANDARD_80211n);
-            std::string phyMode = "ErpOfdmRate54Mbps";        ///< the constant PHY mode string used to transmit frames
-            // uint32_t rtsThreshold = 65535;
-            // std::string manager = "ns3::MinstrelHtWifiManager";
-            // wifi.SetRemoteStationManager(manager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
-            wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-                                         "DataMode", StringValue(phyMode),
-                                         "ControlMode", StringValue(phyMode));
+            // std::string phyMode = "ErpOfdmRate54Mbps";        ///< the constant PHY mode string used to transmit frames
+            uint32_t rtsThreshold = 65535;
+            std::string manager = "ns3::MinstrelHtWifiManager";
+            wifi.SetRemoteStationManager(manager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
+            // wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+            //                              "DataMode", StringValue(phyMode),
+            //                              "ControlMode", StringValue(phyMode));
             YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
             wifiPhy.SetChannel(wifiChannel.Create());
             addressHelper.SetBase("1.1.1.0", "255.255.255.0");
@@ -606,17 +607,21 @@ public:
 
     struct SimThroughputResults {
         double totalThroughput;
+        double averageDelay;
         // double avgThroughput;
         // double avgThroughputByAps;
         // double avgThroughputByStas;
 
-        SimThroughputResults(double totalThroughput
+        SimThroughputResults(
+                double totalThroughput,
+                double averageDelay
                 //,
                 // double avgThroughput,
                 // double avgThroughputByAps,
                 // double avgThroughputByStas,
                 ) :
-            totalThroughput(totalThroughput) //,
+            totalThroughput(totalThroughput),
+            averageDelay(averageDelay)
             // avgThroughput(avgThroughput),
             // avgThroughputByAps(avgThroughputByAps),
             // avgThroughputByStas(avgThroughputByStas)
@@ -792,6 +797,7 @@ public:
                     "QosSupported", BooleanValue(false)
             );
             switchChannel_attr(wifiPhy, apChannelAllocation[i]);
+            setTxPower_attr(wifiPhy, apTxpAllocationDbm[i]);
             apDevs.Add(wifi.Install(wifiPhy, wifiMac, apNode_i));
             NS_LOG_DEBUG("ap dev mac: " << apNode_i->GetDevice(0)->GetAddress());
         }
@@ -821,7 +827,7 @@ public:
     }
 
     void setupApScanners() {
-        rrmalgo = std::make_shared<RRMGreedyAlgo>(channelsToScan);
+        // rrmalgo = std::make_shared<RRMGreedyAlgo>(channelsToScan);
         for (size_t i = 0; i < apNodes.GetN(); i++) { auto apNode = apNodes.Get(i);
             std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
             scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
@@ -1006,8 +1012,10 @@ public:
             << std::setw(10) << "RxPkt"
             << std::setw(15) << "RxBytes"
             << std::setw(15) << "Thrpt (Mbps)"
+            << std::setw(15) << "Mean delay (s)"
             << std::endl;
         double timeDiff = (trafficEndTime - trafficStartTime);
+        double averageDelay = 0.0;
         for (auto [flowId, flowStats] : stats)
         {
             Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flowId);
@@ -1038,31 +1046,34 @@ public:
                     << std::setw(10) << flowStats.rxPackets
                     << std::setw(15) << flowStats.rxBytes
                     << std::setw(15) << std::fixed << std::setprecision(4) << throughput
+                    << std::setw(15) << flowStats.delaySum.GetSeconds() / flowStats.rxPackets
                     << std::endl;
             };
+            averageDelay += flowStats.delaySum.GetSeconds() / flowStats.rxPackets;
             printStats(ip2mac.at(srcAddr), ip2mac.at(dstAddr));
             printStats(ip2mac.at(dstAddr), ip2mac.at(srcAddr));
         }
         cout << "Total busy time: " << nodeStats->GetBusyTime() / (simulationEndTime - simulationStartTime) << endl;
         cout << "==================================================================================================" << endl;
+        averageDelay = averageDelay / stats.size();
         double totalThroughput = (totalRxBytes * 8 / 1000.0 / 1000.0) / timeDiff;
-        return totalThroughput;
+        return {totalThroughput, averageDelay};
     }
 
-   SimSignalResults
+    SimSignalResults
     saveSignalResults() {
         cout << "====================================== RSSI records ==============================================" << endl;
         std::cout << std::left << std::setw(20) << "mac"
-                  << std::setw(10) << "avgRSSI"
-                  << std::setw(10) << "avgNoise"
-                  << std::setw(10) << "avgSNR" << endl;
+            << std::setw(10) << "avgRSSI"
+            << std::setw(10) << "avgNoise"
+            << std::setw(10) << "avgSNR" << endl;
         for (auto [mac, rxPhy] : mac2SignalStats) {
             std::stringstream macStr; macStr << mac;
             std::cout << std::left << std::setw(20) << macStr.str()
-                      << std::setw(10) << rxPhy.rssi / rxPhy.n
-                      << std::setw(10) << rxPhy.noise / rxPhy.n
-                      << std::setw(10) << rxPhy.snr / rxPhy.n
-                      << endl;
+                << std::setw(10) << rxPhy.rssi / rxPhy.n
+                << std::setw(10) << rxPhy.noise / rxPhy.n
+                << std::setw(10) << rxPhy.snr / rxPhy.n
+                << endl;
         }
         cout << "==================================================================================================" << endl;
 
@@ -1093,12 +1104,13 @@ public:
 
    static void PrintThroughputComparison(vector<string>& caseNames, vector<SimulationCaseResults> results) {
        cout << "=================== Throughput Comparison =======================" << endl;
-       cout << setw(15) << "Scenario" << setw(20) << "Throughput(Mbit/s)" << endl;
+       cout << setw(15) << "Scenario" << setw(20) << "Throughput(Mbit/s)" << setw(20) << "Average delay (s)" << endl;
 
        for (size_t i = 0; i < caseNames.size(); i++) {
            auto result = results[i];
            auto name = caseNames[i];
-           cout << setw(15) << name << setw(20) << result.throughputResults.totalThroughput << endl;
+           cout << setw(15) << name << setw(20) << result.throughputResults.totalThroughput
+               << setw(20) << result.throughputResults.averageDelay << endl;
        }
    }
 
@@ -1158,6 +1170,54 @@ map<string, Mac48Address> SimulationCase::traceStr2mac;
 map<Mac48Address, RxPhyInfo> SimulationCase::mac2SignalStats;
 SimulationCase* SimulationCase::currentInst;
 
+std::pair<SimulationCase::SimulationCaseResults, SimulationCase::SimulationCaseResults>
+evaluateAlgo(
+            const vector<uint16_t>& apChannelAllocation,
+            const vector<uint16_t>& apStaAllocation,
+            const vector<double>& apTxpAllocationDbm,
+            const vector<uint16_t>& channelsToScan,
+            const double simulationStartTime,
+            const double simulationEndTime,
+            const double trafficStartTime,
+            const double trafficEndTime,
+            const std::string simCaseName,
+            std::shared_ptr<RRMGreedyAlgo> rrmalgo) {
+    // baseline simulation stage
+    cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ NoRRM Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
+    auto noRrmCase = new SimulationCase(
+            apChannelAllocation,
+            apStaAllocation,
+            apTxpAllocationDbm,
+            channelsToScan,
+            simulationStartTime,
+            simulationEndTime,
+            trafficStartTime,
+            trafficEndTime,
+            simCaseName,
+            rrmalgo
+    );
+    SimulationCase::SimulationCaseResults noRrmResults = noRrmCase->runSimulation(true);
+    delete noRrmCase;
+
+    // rrm simulation stage
+    cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ " << simCaseName << " Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
+    auto withRrmGreedyCase = new SimulationCase(
+            noRrmResults.newRrmAlloc.apChannelAllocation,
+            apStaAllocation,
+            noRrmResults.newRrmAlloc.apTxpAllocationDbm,
+            channelsToScan,
+            simulationStartTime,
+            simulationEndTime,
+            trafficStartTime,
+            trafficEndTime,
+            simCaseName,
+            rrmalgo
+    );
+    SimulationCase::SimulationCaseResults withRrmGreedyResults = withRrmGreedyCase->runSimulation(false);
+    delete withRrmGreedyCase;
+    return {noRrmResults, withRrmGreedyResults};
+}
+
 int main(int argc, char* argv[]) {
     CommandLine cmd(__FILE__);
     // { PyViz v; }
@@ -1207,59 +1267,46 @@ int main(int argc, char* argv[]) {
         2
     };
 
+    vector<uint16_t> channelsToScan = {1, 6, 11};
+
     assert(apStaAllocation.size() == NUM_APS &&
             std::string(
                 "expected NUM_APS=" + std::to_string(NUM_APS) + ", got " + std::to_string(apStaAllocation.size()) + " channel allocations"
                 ).c_str());
 
-    cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ NoRRM Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
-    auto noRrmCase = new SimulationCase(
+    std::shared_ptr<RRMGreedyAlgo> rrmgreedy = std::make_shared<RRMGreedyAlgo>(channelsToScan);
+    auto [baselineResults, withRrmGreedyResults] = evaluateAlgo(
             apChannelAllocation,
             apStaAllocation,
             apTxpAllocationDbm,
-            {1, 6, 11},
+            channelsToScan,
             0.0,
             10.0,
             0.5,
             10.0,
-            "rrmgreedy-before"
+            "rrmgreedy",
+            rrmgreedy
     );
-    SimulationCase::SimulationCaseResults noRrmResults = noRrmCase->runSimulation(true);
-    delete noRrmCase;
-
     cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ With RRMGreedy Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
-    auto withRrmGreedyCase = new SimulationCase(
-            noRrmResults.newRrmAlloc.apChannelAllocation,
+    // RRMGreedyPlusPlusAlgo rrmgRMGreedyPlusPlusAlgo(channelsToScan);
+    std::shared_ptr<RRMGreedyAlgo> rrmgreedyplusplus = std::make_shared<RRMGreedyPlusPlusAlgo>(channelsToScan);
+    auto [baselineResults2, withRrmGreedyPlusPlusResults] = evaluateAlgo(
+            apChannelAllocation,
             apStaAllocation,
-            noRrmResults.newRrmAlloc.apTxpAllocationDbm,
-            {1, 6, 11},
+            apTxpAllocationDbm,
+            channelsToScan,
             0.0,
             10.0,
             0.5,
             10.0,
-            "rrmgreedy-after"
+            "rrmgreedy++",
+            rrmgreedyplusplus
     );
-    SimulationCase::SimulationCaseResults withRrmGreedy = withRrmGreedyCase->runSimulation(false);
-    delete withRrmGreedyCase;
-
-    cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ With RRMGreedy++ Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
-    auto withRrmGreedyPlusPlusCase = new SimulationCase(
-            noRrmResults.newRrmAlloc.apChannelAllocation,
-            apStaAllocation,
-            noRrmResults.newRrmAlloc.apTxpAllocationDbm,
-            {1, 6, 11},
-            0.0,
-            10.0,
-            0.5,
-            10.0,
-            "rrmgreedy-after"
-    );
-    SimulationCase::SimulationCaseResults withRrmGreedyPlusPlus = withRrmGreedyPlusPlusCase->runSimulation(false);
 
     // print metrics and benchmark results
 
     vector<string> caseNames = {"Initial", "RRMGreedy", "RRMGreedy++"};
-    vector<SimulationCase::SimulationCaseResults> results = {noRrmResults, withRrmGreedy, withRrmGreedyPlusPlus};
+    vector<SimulationCase::SimulationCaseResults> results = {baselineResults, withRrmGreedyResults, withRrmGreedyPlusPlusResults};
     SimulationCase::PrintComparison(caseNames, results);
 
     return 0;
@@ -1271,6 +1318,4 @@ public:
     double txp;
     ApSettings(uint16_t channel, double txp) : channel(channel), txp(txp) {}
 };
-
-
 

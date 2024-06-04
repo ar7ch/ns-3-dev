@@ -67,6 +67,9 @@ switchChannel_attr(WifiPhyHelper& wifiPhy, uint16_t operatingChannel,
 void
 setTxPower_attr(Ptr<WifiNetDevice> dev, double txPowerDbm);
 
+void
+setTxPower_attr(WifiPhyHelper& wifiPhy, double txPowerDbm);
+
 
 class Scanner {
 private:
@@ -283,6 +286,8 @@ public:
 
 class RRMGreedyPlusPlusAlgo : public RRMGreedyAlgo {
 protected:
+
+    using RRMGreedyAlgo::RRMGreedyAlgo;
     double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20) override {
         if (!(ch1 < 36 and ch2 < 36)) {
             assert(false && "Only 2.4 GHz band is supported");
