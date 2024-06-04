@@ -6,6 +6,7 @@
 #include "ns3/wifi-net-device.h"
 #include "ns3/wifi-helper.h"
 #include "ns3/wifi-mac.h"
+#include <cassert>
 #include <iostream>
 #include <functional>
 #include <tuple>
@@ -221,7 +222,7 @@ class RRMGreedyAlgo {
 
     void RequestScandata();
 
-    double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20);
+    virtual double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20);
 
     double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState,
             uint16_t ifaceChannel);
@@ -259,7 +260,7 @@ class RRMGreedyAlgo {
 
     void updateRrmResults(GroupState& groupState);
 
-    void Decide();
+    virtual void Decide();
 
     void AddApScandata(const Scanner *scanner);
     static void AddApScandata_s(RRMGreedyAlgo *rrmgreedy, Scanner *scanner);
@@ -278,6 +279,24 @@ class RRMGreedyAlgo {
 
     RRMGreedyAlgo(std::vector<std::shared_ptr<Scanner>>& devs, vector<uint16_t> channels);
     RRMGreedyAlgo(vector<uint16_t> channels) : channelsList(channels) {}
+};
+
+class RrmGreedyPlusPlusAlgo : public RRMGreedyAlgo {
+
+    double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20) override {
+        if (!(ch1 < 36 and ch2 < 36)) {
+            assert(false && "Only 2.4 GHz band is supported");
+        }
+        double freq_diff = abs(ch1 - ch2) * 5;
+        double max_distance = width; // Maximum distance for full interference is the channel width
+        if (freq_diff > max_distance) {
+            return 0.0;
+        }
+        // Linear interpolation between 0 and 1 based on overlap
+        double overlap = 1 - (freq_diff / max_distance);
+        return overlap;
+    }
+
 };
 
 

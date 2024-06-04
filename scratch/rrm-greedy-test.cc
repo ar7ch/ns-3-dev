@@ -70,7 +70,7 @@ static bool g_logic = false;
 #define XML_NEWLINE ""
 
 static const uint32_t g_packetSize = 1024;
-static const double g_packetInterval = 0.005;
+static const double g_packetInterval = 0.05;
 
 
 class NodeStatistics
@@ -479,6 +479,8 @@ public:
     // useful data structures
     map<Ipv4Address, Mac48Address> ip2mac;
     map<Mac48Address, Ipv4Address> mac2ip;
+    map<Mac48Address, set<Mac48Address>> bssid2stas;
+    map<Mac48Address, Mac48Address> sta2bssid;
     // animation
     std::unique_ptr<AnimationInterface> anim;
     // metrics capture
@@ -588,9 +590,46 @@ public:
             Simulator::Stop(Seconds(trafficEndTime));
         }
 
+    struct SimSignalResults {
+        using snr_t = double;
+        map<Mac48Address, snr_t> avgSnrBySta;
+        snr_t avgSnr;
+        map<Mac48Address, snr_t> avgSnrByAps;
+
+        SimSignalResults(map<Mac48Address, snr_t> signalResults,
+                snr_t avgSnr,
+                map<Mac48Address, snr_t> avgSnrByAps) :
+            avgSnrBySta(signalResults),
+            avgSnr(avgSnr),
+            avgSnrByAps(avgSnrByAps) {}
+    };
+
+    struct SimThroughputResults {
+        double totalThroughput;
+        // double avgThroughput;
+        // double avgThroughputByAps;
+        // double avgThroughputByStas;
+
+        SimThroughputResults(double totalThroughput
+                //,
+                // double avgThroughput,
+                // double avgThroughputByAps,
+                // double avgThroughputByStas,
+                ) :
+            totalThroughput(totalThroughput) //,
+            // avgThroughput(avgThroughput),
+            // avgThroughputByAps(avgThroughputByAps),
+            // avgThroughputByStas(avgThroughputByStas)
+        {}
+    };
+
+
     struct SimulationCaseResults {
     public:
-        double totalThroughput;
+        SimThroughputResults throughputResults;
+        SimSignalResults signalResults;
+
+        // RRM results from this simulation run
         struct RrmResults {
             vector<uint16_t> apChannelAllocation;
             vector<double> apTxpAllocationDbm;
@@ -603,14 +642,16 @@ public:
             {}
         };
         const RrmResults newRrmAlloc;
-        SimulationCaseResults(double totalThroughput, const RrmResults& rrmResults) :
-            totalThroughput(totalThroughput),
+        SimulationCaseResults(
+                SimThroughputResults throughputResults,
+                SimSignalResults signalResults,
+                const RrmResults& rrmResults) :
+            throughputResults(throughputResults),
+            signalResults(signalResults),
             newRrmAlloc(rrmResults)
         {}
     };
 
-
-    map<Mac48Address, Mac48Address> sta2bssid;
 
     Mac48Address getApBssid(Mac48Address staMac) {
         return sta2bssid.at(staMac);
@@ -671,6 +712,7 @@ public:
         vector<uint16_t> apChannelAllocation(n_aps, 0);
         vector<double> apTxpAllocationDbm(n_aps, 0);
         Simulator::Run();
+        monitor->CheckForLostPackets();
         if (doRrm) {
             ApsRrmAssignments rrmResults = rrmgreedy->GetRrmResults();
             for (size_t i = 0; i < n_aps; i++) {
@@ -682,18 +724,21 @@ public:
                 // NS_LOG_DEBUG("AP " << bssid << " switched to RrmResult channel " << chan_i << " and txp " << txp_i);
             }
         }
-        double totalThroughput = printMetrics();
-        return SimulationCaseResults(totalThroughput, {apChannelAllocation, apTxpAllocationDbm});
+        SimThroughputResults throughputResults = saveThroughputResults();
+        SimSignalResults signalResults = saveSignalResults();
+
+        SimulationCaseResults simResults(throughputResults, signalResults,
+                {apChannelAllocation, apTxpAllocationDbm});
+        return simResults;
     }
 
-    double
-    printMetrics() {
-        printRssiRecords();
-        monitor->CheckForLostPackets();
-        double totalThroughput = printThroughputResults();
-        std::cout << "Total group throughput: " << totalThroughput << "Mbps" << std::endl;
-        return totalThroughput;
-    }
+    // double
+    // printMetrics() {
+    //     saveSignalResults();
+    //     double totalThroughput = saveThroughputResults();
+    //     std::cout << "Total group throughput: " << totalThroughput << "Mbps" << std::endl;
+    //     return totalThroughput;
+    // }
 
     void setupAnim() {
         setupApsAnim();
@@ -876,6 +921,7 @@ public:
             for (size_t k = 0; k < staNodes[i].GetN(); k++) {
                 Mac48Address staMac = getWifiNd(staNodes[i].Get(k))->GetMac()->GetAddress();
                 sta2bssid[staMac] = bssid;
+                bssid2stas[bssid].insert(staMac);
                 createScannerForStaNode(staNodes[i].Get(k));
             }
         }
@@ -944,7 +990,8 @@ public:
         cout << "====================================================================" << endl;
     }
 
-    double printThroughputResults() {
+    SimThroughputResults
+    saveThroughputResults() {
         double totalRxBytes = 0.0;
         Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
         FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
@@ -997,10 +1044,12 @@ public:
         }
         cout << "Total busy time: " << nodeStats->GetBusyTime() / (simulationEndTime - simulationStartTime) << endl;
         cout << "==================================================================================================" << endl;
-        return (totalRxBytes * 8 / 1000.0 / 1000.0) / timeDiff;
+        double totalThroughput = (totalRxBytes * 8 / 1000.0 / 1000.0) / timeDiff;
+        return totalThroughput;
     }
 
-    void printRssiRecords() {
+   SimSignalResults
+    saveSignalResults() {
         cout << "====================================== RSSI records ==============================================" << endl;
         std::cout << std::left << std::setw(20) << "mac"
                   << std::setw(10) << "avgRSSI"
@@ -1015,12 +1064,94 @@ public:
                       << endl;
         }
         cout << "==================================================================================================" << endl;
+
+
+        double avgSnr = 0.0;
+        map<Mac48Address, double> signalStats;
+        map<Mac48Address, double> avgSnrByAps;
+        for (auto [mac, rxPhy] : mac2SignalStats) {
+            rxPhy.snr = rxPhy.snr / rxPhy.n;
+            rxPhy.rssi = rxPhy.rssi / rxPhy.n;
+            rxPhy.noise = rxPhy.noise / rxPhy.n;
+
+            signalStats[mac] = rxPhy.snr;
+            avgSnr += rxPhy.snr;
+        }
+        for (auto [bssid, stas] : bssid2stas) {
+            double avgSnrAp = 0.0;
+            for (auto sta : stas) {
+                avgSnrAp += signalStats[sta];
+            }
+            avgSnrAp = avgSnrAp / stas.size();
+            avgSnrByAps[bssid] = avgSnrAp;
+        }
+        avgSnr = avgSnr / mac2SignalStats.size();
+        SimSignalResults signalResults(signalStats, avgSnr, avgSnrByAps);
+        return signalResults;
     }
+
+   static void PrintThroughputComparison(vector<string>& caseNames, vector<SimulationCaseResults> results) {
+       cout << "=================== Throughput Comparison =======================" << endl;
+       cout << setw(15) << "Scenario" << setw(20) << "Throughput(Mbit/s)" << endl;
+
+       for (size_t i = 0; i < caseNames.size(); i++) {
+           auto result = results[i];
+           auto name = caseNames[i];
+           cout << setw(15) << name << setw(20) << result.throughputResults.totalThroughput << endl;
+       }
+   }
+
+   static void PrintSignalComparison(vector<string>& caseNames, vector<SimulationCaseResults>& results) {
+       cout << "=================== Signal Comparison (Total AvgSNR) =======================" << endl;
+       cout << setw(15) << "Scenario" << setw(20) << "AvgSNR" << endl;
+       size_t n_cases = caseNames.size();
+       for (size_t i = 0; i < n_cases; i++) {
+           auto result = results[i];
+           auto name = caseNames[i];
+           cout << setw(15) << name << setw(20) << result.signalResults.avgSnr << endl;
+       }
+       cout << "=================== Signal Comparison (AvgSNR by AP) =======================" << endl;
+       cout << setw(15) << "Scenario";
+       for (size_t i = 0; i < results[i].signalResults.avgSnrByAps.size(); i++) {
+           cout << setw(20) << "AvgSNR@AP" + std::to_string(i);
+       }
+       cout << endl;
+
+       for (size_t i = 0; i < n_cases; i++) {
+           cout << setw(15) << caseNames[i];
+           for(auto& [mac, snr] : results[i].signalResults.avgSnrByAps) {
+               cout << setw(20) << snr;
+           }
+           cout << endl;
+       }
+       cout << "=================== Signal Comparison (AvgSNR by STA) =======================" << endl;
+       cout << setw(15) << "Scenario";
+       for (size_t i = 0; i < results[i].signalResults.avgSnrBySta.size(); i++) {
+           cout << setw(15) << "AvgSNR@STA" + std::to_string(i);
+       }
+       cout << endl;
+
+       for (size_t i = 0; i < n_cases; i++) {
+           cout << setw(15) << caseNames[i];
+           for(auto& [mac, snr] : results[i].signalResults.avgSnrBySta) {
+               cout << setw(15) << snr;
+           }
+           cout << endl;
+       }
+   }
+
+   static void PrintComparison(vector<string>& caseNames, vector<SimulationCaseResults>& results) {
+       PrintThroughputComparison(caseNames, results);
+       PrintSignalComparison(caseNames, results);
+       cout << "================================================================" << endl;
+   }
 
     ~SimulationCase() {
         Simulator::Destroy();
     }
 };
+
+
 
 map<string, Mac48Address> SimulationCase::traceStr2mac;
 map<Mac48Address, RxPhyInfo> SimulationCase::mac2SignalStats;
@@ -1109,9 +1240,11 @@ int main(int argc, char* argv[]) {
     );
     SimulationCase::SimulationCaseResults withRrm = withRrmCase->runSimulation(false);
 
-    cout << "########################### Metrics #########################" << endl;
-    cout << setw(15) << "Metric" << setw(20) << "No RRM" << setw(20) << "RRMGreedy" << endl;
-    cout << setw(15) << "Thrpt" << setw(20) << std::to_string(initialResults.totalThroughput) + " Mbps" << setw(20) << std::to_string(withRrm.totalThroughput) + " Mbps" << endl;
+    // print metrics and benchmark results
+
+    vector<string> caseNames = {"Initial", "With RRM"};
+    vector<SimulationCase::SimulationCaseResults> results = {initialResults, withRrm};
+    SimulationCase::PrintComparison(caseNames, results);
 
     delete withRrmCase;
     return 0;
