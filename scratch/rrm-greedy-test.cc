@@ -179,6 +179,8 @@ class NodeStatistics
      */
     double GetBusyTime() const;
 
+    double GetIdleTime() const;
+
   private:
     /// Time, DataRate pair vector.
     typedef std::vector<std::pair<Time, DataRate>> TxTime;
@@ -409,6 +411,11 @@ NodeStatistics::GetBusyTime() const
     return m_totalBusyTime + m_totalRxTime;
 }
 
+double NodeStatistics::GetIdleTime() const
+{
+    return m_totalIdleTime;
+}
+
 /**
  * Callback called by WifiNetDevice/RemoteStationManager/x/PowerChange.
  *
@@ -487,6 +494,7 @@ public:
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor;
     std::unique_ptr<NodeStatistics> nodeStats;
+    int phyStateConnected_n = 0;
     // plotting
     GnuplotHelper plotHelper;
     // mobility
@@ -560,12 +568,7 @@ public:
             }
 
             nodeStats = std::make_unique<NodeStatistics>(apDevs, allStaDevs);
-
             do {
-                // Config::Connect("/NodeList/4/ApplicationList/*/$ns3::UdpEchoClient/Rx", MakeCallback(&NodeStatistics::RxCallback, &(*nodeStats)));
-                // Config::Connect("/NodeList/5/ApplicationList/*/$ns3::UdpEchoServer/Rx",
-                //         MakeCallback(&NodeStatistics::RxCallback, &(*nodeStats)));
-                // Register power and rate changes to calculate the Average Transmit Power
                 for (size_t i = 0; i < n_aps; i++) {
                     uint32_t apNodeId = apNodes.Get(i)->GetId();
                     auto connectNode = [&](uint32_t nodeId) {
@@ -580,6 +583,7 @@ public:
                     for (int k = 0; k < apStaAllocation[i]; k++) {
                         auto staNode = staNodes[i].Get(k);
                         connectNode(staNode->GetId());
+                        phyStateConnected_n += 1;
                     }
                 }
                 nodeStats->CheckStatistics(1);
@@ -608,20 +612,27 @@ public:
     struct SimThroughputResults {
         double totalThroughput;
         double averageDelay;
+        double avgPhyBusyTime;
+        double avgPhyIdleTime;
         // double avgThroughput;
         // double avgThroughputByAps;
         // double avgThroughputByStas;
 
         SimThroughputResults(
                 double totalThroughput,
-                double averageDelay
+                double averageDelay,
+                double avgPhyBusyTime,
+                double avgPhyIdleTime
+
                 //,
                 // double avgThroughput,
                 // double avgThroughputByAps,
                 // double avgThroughputByStas,
                 ) :
             totalThroughput(totalThroughput),
-            averageDelay(averageDelay)
+            averageDelay(averageDelay),
+            avgPhyBusyTime(avgPhyBusyTime),
+            avgPhyIdleTime(avgPhyIdleTime)
             // avgThroughput(avgThroughput),
             // avgThroughputByAps(avgThroughputByAps),
             // avgThroughputByStas(avgThroughputByStas)
@@ -1053,11 +1064,13 @@ public:
             printStats(ip2mac.at(srcAddr), ip2mac.at(dstAddr));
             printStats(ip2mac.at(dstAddr), ip2mac.at(srcAddr));
         }
-        cout << "Total busy time: " << nodeStats->GetBusyTime() / (simulationEndTime - simulationStartTime) << endl;
+        double avgBusyTime = (nodeStats->GetBusyTime() / (simulationEndTime - simulationStartTime)) / phyStateConnected_n;
+        double avgIdleTime = (nodeStats->GetIdleTime() / (simulationEndTime - simulationStartTime)) / phyStateConnected_n;
+
         cout << "==================================================================================================" << endl;
         averageDelay = averageDelay / stats.size();
         double totalThroughput = (totalRxBytes * 8 / 1000.0 / 1000.0) / timeDiff;
-        return {totalThroughput, averageDelay};
+        return {totalThroughput, averageDelay, avgBusyTime, avgIdleTime};
     }
 
     SimSignalResults
@@ -1104,13 +1117,22 @@ public:
 
    static void PrintThroughputComparison(vector<string>& caseNames, vector<SimulationCaseResults> results) {
        cout << "=================== Throughput Comparison =======================" << endl;
-       cout << setw(15) << "Scenario" << setw(20) << "Throughput(Mbit/s)" << setw(20) << "Average delay (s)" << endl;
+       cout << setw(15) << "Scenario"
+           << setw(20) << "Throughput(Mbit/s)"
+           << setw(20) << "Average delay (s)"
+           << setw(20) << "AvgPhyBusyTime (s)"
+           << setw(20) << "AvgPhyIdleTime (s)"
+           << endl;
 
        for (size_t i = 0; i < caseNames.size(); i++) {
            auto result = results[i];
            auto name = caseNames[i];
-           cout << setw(15) << name << setw(20) << result.throughputResults.totalThroughput
-               << setw(20) << result.throughputResults.averageDelay << endl;
+           cout << setw(15) << name
+               << setw(20) << result.throughputResults.totalThroughput
+               << setw(20) << result.throughputResults.averageDelay
+               << setw(20) << result.throughputResults.avgPhyBusyTime
+               << setw(20) << result.throughputResults.avgPhyIdleTime
+               << endl;
        }
    }
 
@@ -1157,6 +1179,9 @@ public:
        PrintThroughputComparison(caseNames, results);
        PrintSignalComparison(caseNames, results);
        cout << "================================================================" << endl;
+   }
+
+   void PrintPlots() {
    }
 
     ~SimulationCase() {
