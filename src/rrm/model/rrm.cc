@@ -816,5 +816,221 @@ RRMGreedyAlgo::PrintIfaceAirData(GroupState& groupState, Mac48Address bssid) {
     NS_LOG_LOGIC("==========================================================");
 }
 
+double
+RRMGreedyPlusPlusAlgo::OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState, uint16_t ifaceChannel) {
+    double cumInterf = 0.0;
+    auto iface = devices[bssid];
+    NS_LOG_DEBUG("-- Calculating onInterf for " << bssid << " on channel " << ifaceChannel);
+
+    for (auto& [otherBssid, scandataEntry] : groupState[bssid].signals) {
+        if (otherBssid == bssid) {
+            continue;
+        }
+        uint16_t otherChannel = scandataEntry.channel;
+        double otherTxDiff = 0.0;
+        if (groupState.count(otherBssid)) { // other AP belongs to RRM group
+            otherTxDiff = groupState[otherBssid].txDiff;
+            otherChannel = groupState[otherBssid].channel;
+        }
+        double ciScore = ChannelInterference(
+                ifaceChannel,
+                otherChannel
+                );
+        // NS_LOG_LOGIC(" --- Channel interference score: " << ciScore);
+        double signal = scandataEntry.rssi + otherTxDiff;
+        signal = std::min(signal, MaxRSSI_dbm);
+        signal = std::max(signal, MinRSSI_dbm);
+        signal = (signal - MinRSSI_dbm) / (MaxRSSI_dbm - MinRSSI_dbm);
+        // NS_LOG_LOGIC(" ------- Normalized RSSI: " << signal);
+        cumInterf += ciScore * signal + 10*scandataEntry.clients.size() * 0.1;
+        NS_LOG_DEBUG("--- Scandata entry: " << otherBssid
+                << ", ch: " << scandataEntry.channel
+                << ", rssi: " << scandataEntry.rssi << " (norm=" << signal << ")"
+                << ", type: " << (groupState.count(otherBssid) ? "Inner" : "Outer")
+                << ", ciScore: " << ciScore
+                );
+    }
+    // double interf = cumInnerInterf + cumOuterInterf;
+    // assert (cumInterf > 0.0);
+    NS_LOG_DEBUG("-- Total onInterf for " << bssid << ": " << cumInterf);
+    return cumInterf;
+}
+
+void
+RRMGreedyPlusPlusAlgo::Decide() {
+    SIM_LOG_LOGIC("=== Running RRMGreedy++ algorithm ===");
+
+    SIM_LOG_LOGIC("1. Requesting scan data");
+    RequestScandata();
+
+    SIM_LOG_LOGIC("2. Preprocessing scan data");
+    GroupState groupState = PreprocessScanData();
+    SIM_LOG_LOGIC("Initial group state:");
+    PrintGroupState(groupState);
+
+    SIM_LOG_LOGIC("3. Calculating initial group interference");
+    double prevGroupInterf = 0;
+    double groupInterf = GroupInterference(groupState);
+    const double groupInterfEps = 0.001; // TODO elaborate the value
+
+    SIM_LOG_LOGIC("- Initial group interference: " << groupInterf);
+
+    SIM_LOG_LOGIC("4. Starting iterative greedy channel selection");
+    // channel selection
+    // while ((groupInterf - prevGroupInterf) > groupInterfEps);
+    constexpr int MAX_ITER = 1000;
+    for (int i = 1; i < MAX_ITER; i++) {
+        /*
+         * for each device in the group, calculate the interference
+         * caused by the group
+         * choose the device with the lowest interference
+         * if the interference is the same,
+         * choose the device with the lowest number
+         */
+        for (auto& [bssid, ifaceState] : groupState) {
+            NS_LOG_LOGIC("- Calculating interference for " << bssid);
+            double ifaceInterf = std::numeric_limits<double>::max();
+            uint16_t ifaceInitialChannel = ifaceState.channel;
+            uint16_t minInterfChannel = ifaceInitialChannel;
+            for (auto ch_i : channelsList) {
+                double interf = OnIfaceInterference(bssid, groupState, ch_i);
+                NS_LOG_LOGIC("- Channel " << ch_i << " interference: " << interf);
+                if (interf < ifaceInterf) {
+                    ifaceInterf = interf;
+                    minInterfChannel = ch_i;
+                }
+
+            }
+            NS_LOG_LOGIC(
+                    "- " << bssid
+                    << ": minimal interference: "
+                    << ifaceInterf
+                    << " on channel " << minInterfChannel
+                    << endl);
+            ifaceState.channel = minInterfChannel;
+            NS_LOG_LOGIC(bssid << ": channel switch "
+                    << ifaceInitialChannel << " -> " << minInterfChannel);
+        }
+        // switch channel for the device with the lowest interference
+        // and update the scan data
+        prevGroupInterf = groupInterf;
+        groupInterf = GroupInterference(groupState);
+        NS_LOG_LOGIC("== ACS iteration=" << std::to_string(i)
+                << ", group interference: " << prevGroupInterf << " -> " << groupInterf
+                << " ==");
+        if ((prevGroupInterf - groupInterf) < groupInterfEps) {
+            NS_LOG_LOGIC("ACS: no significant improvement, stopping");
+            break;
+        }
+    }
+    // TPC
+    bool managePower = true;
+    bool alreadyPrintedIad = false;
+    prevGroupInterf = groupInterf;
+    if (managePower) {
+        // set txdiff to max power
+
+        for (auto& [bssid, scanData] : scandata) {
+            RRMGreedyAlgo::IfaceAirData ifaceData;
+            if (rrmGroup.count(bssid) == 0) {
+                NS_LOG_ERROR("bssid " << bssid << " is not in the RRM group");
+                assert(false);
+            }
+            auto cpe = devices[bssid];
+            ifaceData.txPowerDbm = cpe->GetDevice()->GetPhy()->GetTxPowerEnd();
+            // ifaceData.txDiff = MaxTxPower_dbm - ifaceData.txPowerDbm;
+            assert(
+                    cpe->GetDevice()->GetPhy()->GetTxPowerEnd() == cpe->GetDevice()->GetPhy()->GetTxPowerStart()
+                  );
+            ifaceData.channel = cpe->getOperatingChannel();
+            ifaceData.signals = scanData;
+            groupState[bssid] = ifaceData;
+        }
+        NS_LOG_LOGIC("5. Starting TPC");
+        for (int i = 0; managePower && i < MAX_ITER; i++) {
+            Mac48Address worstIface;
+            double worstInterf = 0.0;
+            double worstSignal = 0.0;
+            // find the worst interface
+            for (auto& [bssid, ifaceState] : groupState) {
+                if (!alreadyPrintedIad) {
+                    PrintIfaceAirData(groupState, bssid);
+                    alreadyPrintedIad = true;
+                }
+                auto [ifaceInterf, ifaceSignal] = FromIfaceInterference(bssid, groupState);
+                if (ifaceInterf > worstInterf) {
+                    worstInterf = ifaceInterf;
+                    worstSignal = ifaceSignal;
+                    worstIface = bssid;
+                }
+            }
+            if (worstInterf == 0.0) {
+                NS_LOG_LOGIC("TPC: no interference, stopping");
+                break;
+            }
+            NS_LOG_LOGIC("TPC: worst interface: " << worstIface <<
+                    " interference=" << worstInterf <<
+                    ", signal=" << worstSignal);
+            // reduce power of the worst interface
+            double oldTxDiff = groupState[worstIface].txDiff;
+            double needDiff = groupState[worstIface].txPowerDbm - MinTxPower_dbm;
+            double needPower = MinTxPower_dbm + needDiff/2.0;
+            double newTxDiff = needPower - groupState[worstIface].txPowerDbm;
+            if (newTxDiff + groupState[worstIface].txPowerDbm < MinTxPower_dbm) { // FIXME
+                NS_LOG_LOGIC("TPC: worst txPower is minimal");
+                newTxDiff = MinTxPower_dbm - groupState[worstIface].txPowerDbm;
+            }
+            groupState[worstIface].txDiff = newTxDiff;
+            NS_LOG_LOGIC("TPC: " << "txdiff " << oldTxDiff << " -> " << newTxDiff
+                    << " (txpower "
+                    << groupState[worstIface].txPowerDbm + oldTxDiff << " -> " << groupState[worstIface].txPowerDbm + newTxDiff << ")"
+                    );
+            groupInterf = GroupInterference(groupState);
+            NS_LOG_LOGIC("== TPC " << "iteration " << i << ": group interference "
+                    << prevGroupInterf << " -> " << groupInterf);
+            if ((prevGroupInterf - groupInterf) < groupInterfEps) {
+                NS_LOG_LOGIC("TPC: no significant improvement, stopping");
+                break;
+            }
+            prevGroupInterf = groupInterf;
+        }
+    }
+
+    NS_LOG_LOGIC(
+            "=====" << endl
+            << "Ending with group interference=" << groupInterf
+            << " prevGroupInterf=" << prevGroupInterf
+            << " eps=" << groupInterfEps);
+    NS_LOG_LOGIC("New group state:");
+    PrintGroupState(groupState);
+    NS_LOG_LOGIC("=====");
+    NS_LOG_LOGIC("6. Saving results");
+    // updateAPsConfig(groupState);
+    updateRrmResults(groupState);
+}
+
+
+RRMGreedyAlgo::GroupState
+RRMGreedyPlusPlusAlgo::PreprocessScanData() {
+    RRMGreedyAlgo::GroupState groupState;
+    for (auto& [bssid, scanData] : scandata) {
+        RRMGreedyAlgo::IfaceAirData ifaceData;
+        if (rrmGroup.count(bssid) == 0) {
+            NS_LOG_ERROR("bssid " << bssid << " is not in the RRM group");
+            assert(false);
+        }
+        auto cpe = devices[bssid];
+        ifaceData.txPowerDbm = cpe->GetDevice()->GetPhy()->GetTxPowerEnd();
+        // ifaceData.txDiff = MaxTxPower_dbm - ifaceData.txPowerDbm;
+        assert(
+            cpe->GetDevice()->GetPhy()->GetTxPowerEnd() == cpe->GetDevice()->GetPhy()->GetTxPowerStart()
+        );
+        ifaceData.channel = cpe->getOperatingChannel();
+        ifaceData.signals = scanData;
+        groupState[bssid] = ifaceData;
+    }
+    return groupState;
+}
+
 } // ns3 namespace
 

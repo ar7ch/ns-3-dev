@@ -192,7 +192,7 @@ public:
 };
 
 class RRMGreedyAlgo {
-
+protected:
     const double MinRSSI_dbm = -100;
     const double MaxRSSI_dbm = -25;
     const double scandataStaleTime_s = 5.0;
@@ -218,13 +218,13 @@ class RRMGreedyAlgo {
 
     using GroupState = std::map<Mac48Address, IfaceAirData>;
 
-    GroupState PreprocessScanData();
+    virtual GroupState PreprocessScanData();
 
     void RequestScandata();
 
     virtual double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20);
 
-    double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState,
+    virtual double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState,
             uint16_t ifaceChannel);
 
     std::pair<double, double> FromIfaceInterference(const Mac48Address& bssid,
@@ -246,7 +246,7 @@ class RRMGreedyAlgo {
     // void PrintScanData(Scanner::ScanData& scandata);
     void PrintIfaceAirData(GroupState& groupState, Mac48Address bssid);
 
-    public:
+public:
 
     std::map<Mac48Address, ApRrmAssignment> rrmResults;
 
@@ -281,8 +281,8 @@ class RRMGreedyAlgo {
     RRMGreedyAlgo(vector<uint16_t> channels) : channelsList(channels) {}
 };
 
-class RrmGreedyPlusPlusAlgo : public RRMGreedyAlgo {
-
+class RRMGreedyPlusPlusAlgo : public RRMGreedyAlgo {
+protected:
     double ChannelInterference(uint16_t ch1, uint16_t ch2, int width=20) override {
         if (!(ch1 < 36 and ch2 < 36)) {
             assert(false && "Only 2.4 GHz band is supported");
@@ -297,6 +297,11 @@ class RrmGreedyPlusPlusAlgo : public RRMGreedyAlgo {
         return overlap;
     }
 
+    double OnIfaceInterference(const Mac48Address& bssid, GroupState& groupState,
+            uint16_t ifaceChannel) override;
+    GroupState PreprocessScanData() override;
+public:
+    void Decide() override;
 };
 
 

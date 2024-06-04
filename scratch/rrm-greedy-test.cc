@@ -466,7 +466,7 @@ public:
     vector<Ipv4InterfaceContainer> staInterfaces;
     // RRM
     vector<std::shared_ptr<Scanner>> scanners;
-    std::shared_ptr<RRMGreedyAlgo> rrmgreedy;
+    std::shared_ptr<RRMGreedyAlgo> rrmalgo;
     vector<uint16_t> apChannelAllocation;
     vector<double> apTxpAllocationDbm;
     vector<uint16_t> apStaAllocation;
@@ -535,12 +535,12 @@ public:
     {
             wifi.SetStandard(WIFI_STANDARD_80211n);
             std::string phyMode = "ErpOfdmRate54Mbps";        ///< the constant PHY mode string used to transmit frames
-            uint32_t rtsThreshold = 65535;
-            std::string manager = "ns3::MinstrelHtWifiManager";
-            wifi.SetRemoteStationManager(manager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
-            // wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-            //                              "DataMode", StringValue(phyMode),
-            //                              "ControlMode", StringValue(phyMode));
+            // uint32_t rtsThreshold = 65535;
+            // std::string manager = "ns3::MinstrelHtWifiManager";
+            // wifi.SetRemoteStationManager(manager, "RtsCtsThreshold", UintegerValue(rtsThreshold));
+            wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                                         "DataMode", StringValue(phyMode),
+                                         "ControlMode", StringValue(phyMode));
             YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
             wifiPhy.SetChannel(wifiChannel.Create());
             addressHelper.SetBase("1.1.1.0", "255.255.255.0");
@@ -707,14 +707,14 @@ public:
     runSimulation(bool doRrm) {
         printSimulationParams();
         if (doRrm) {
-            Simulator::Schedule(Seconds(7.0), [&](){rrmgreedy->Decide();});
+            Simulator::Schedule(Seconds(7.0), [&](){rrmalgo->Decide();});
         }
         vector<uint16_t> apChannelAllocation(n_aps, 0);
         vector<double> apTxpAllocationDbm(n_aps, 0);
         Simulator::Run();
         monitor->CheckForLostPackets();
         if (doRrm) {
-            ApsRrmAssignments rrmResults = rrmgreedy->GetRrmResults();
+            ApsRrmAssignments rrmResults = rrmalgo->GetRrmResults();
             for (size_t i = 0; i < n_aps; i++) {
                 auto apNode = apNodes.Get(i);
                 Mac48Address bssid = getWifiNd(apNode)->GetMac()->GetAddress();
@@ -791,6 +791,7 @@ public:
                     "Ssid", SsidValue(Ssid(ssid)),
                     "QosSupported", BooleanValue(false)
             );
+            switchChannel_attr(wifiPhy, apChannelAllocation[i]);
             apDevs.Add(wifi.Install(wifiPhy, wifiMac, apNode_i));
             NS_LOG_DEBUG("ap dev mac: " << apNode_i->GetDevice(0)->GetAddress());
         }
@@ -820,21 +821,21 @@ public:
     }
 
     void setupApScanners() {
-        rrmgreedy = std::make_shared<RRMGreedyAlgo>(channelsToScan);
+        rrmalgo = std::make_shared<RRMGreedyAlgo>(channelsToScan);
         for (size_t i = 0; i < apNodes.GetN(); i++) { auto apNode = apNodes.Get(i);
             std::shared_ptr<Scanner> scanner = CreateScannerForNode(apNode, channelsToScan, "AP-" + std::to_string(i));
             scanner->setAfterScanCallback<void, RRMGreedyAlgo*, Scanner*>(
                     std::function<void(RRMGreedyAlgo*, Scanner*)>(
                         RRMGreedyAlgo::AddApScandata_s
                         ),
-                    &(*rrmgreedy),
+                    &(*rrmalgo),
                     &(*scanner)
                     );
             const double apScanStart_s = 2.5 + (0.01*i);
             Simulator::Schedule(Seconds(apScanStart_s), &Scanner::Scan, &(*scanner));
             scanners.push_back(scanner);
         }
-        rrmgreedy->AddDevices(scanners);
+        rrmalgo->AddDevices(scanners);
     }
 
     void setupUdpEchoClientServer (Ptr<Node> nodeServer, Ptr<Node> nodeClient, Ipv4InterfaceContainer& staInterfaces_i,
@@ -1212,7 +1213,7 @@ int main(int argc, char* argv[]) {
                 ).c_str());
 
     cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ NoRRM Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
-    auto initialSettingsCase = new SimulationCase(
+    auto noRrmCase = new SimulationCase(
             apChannelAllocation,
             apStaAllocation,
             apTxpAllocationDbm,
@@ -1223,14 +1224,14 @@ int main(int argc, char* argv[]) {
             10.0,
             "rrmgreedy-before"
     );
-    SimulationCase::SimulationCaseResults initialResults = initialSettingsCase->runSimulation(true);
-    delete initialSettingsCase;
+    SimulationCase::SimulationCaseResults noRrmResults = noRrmCase->runSimulation(true);
+    delete noRrmCase;
 
     cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ With RRMGreedy Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
-    auto withRrmCase = new SimulationCase(
-            initialResults.newRrmAlloc.apChannelAllocation,
+    auto withRrmGreedyCase = new SimulationCase(
+            noRrmResults.newRrmAlloc.apChannelAllocation,
             apStaAllocation,
-            initialResults.newRrmAlloc.apTxpAllocationDbm,
+            noRrmResults.newRrmAlloc.apTxpAllocationDbm,
             {1, 6, 11},
             0.0,
             10.0,
@@ -1238,15 +1239,29 @@ int main(int argc, char* argv[]) {
             10.0,
             "rrmgreedy-after"
     );
-    SimulationCase::SimulationCaseResults withRrm = withRrmCase->runSimulation(false);
+    SimulationCase::SimulationCaseResults withRrmGreedy = withRrmGreedyCase->runSimulation(false);
+    delete withRrmGreedyCase;
+
+    cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~ With RRMGreedy++ Simulation ~~~~~~~~~~~~~~~~~~~~~~~~~" << endl;
+    auto withRrmGreedyPlusPlusCase = new SimulationCase(
+            noRrmResults.newRrmAlloc.apChannelAllocation,
+            apStaAllocation,
+            noRrmResults.newRrmAlloc.apTxpAllocationDbm,
+            {1, 6, 11},
+            0.0,
+            10.0,
+            0.5,
+            10.0,
+            "rrmgreedy-after"
+    );
+    SimulationCase::SimulationCaseResults withRrmGreedyPlusPlus = withRrmGreedyPlusPlusCase->runSimulation(false);
 
     // print metrics and benchmark results
 
-    vector<string> caseNames = {"Initial", "With RRM"};
-    vector<SimulationCase::SimulationCaseResults> results = {initialResults, withRrm};
+    vector<string> caseNames = {"Initial", "RRMGreedy", "RRMGreedy++"};
+    vector<SimulationCase::SimulationCaseResults> results = {noRrmResults, withRrmGreedy, withRrmGreedyPlusPlus};
     SimulationCase::PrintComparison(caseNames, results);
 
-    delete withRrmCase;
     return 0;
 }
 
